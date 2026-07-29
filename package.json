@@ -1,0 +1,170 @@
+{
+	"name": "antigravity-vscode",
+	"displayName": "Antigravity for VS Code",
+	"description": "Antigravity CLI inside VS Code: Harness the power of Google Antigravity directly in your editor",
+	"version": "0.1.2",
+	"publisher": "antigravity",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"AI",
+		"Chat"
+	],
+	"keywords": [
+		"antigravity",
+		"agy",
+		"ai",
+		"agent",
+		"gemini"
+	],
+	"activationEvents": [
+		"onStartupFinished",
+		"onWebviewPanel:antigravityVSCodePanel"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"configuration": {
+			"title": "Antigravity Code",
+			"properties": {
+				"antigravity.cliPath": {
+					"type": "string",
+					"default": "agy",
+					"description": "Path or executable name for the Antigravity CLI binary."
+				},
+				"antigravity.useTerminal": {
+					"type": "boolean",
+					"default": false,
+					"description": "Launch Antigravity as an interactive terminal tab in the editor grid instead of the webview."
+				},
+				"antigravity.dangerouslySkipPermissions": {
+					"type": "boolean",
+					"default": true,
+					"description": "Auto-approve all tool permission requests without prompting. Required for webview mode since there is no interactive permission handler."
+				},
+				"antigravity.model": {
+					"type": "string",
+					"default": "",
+					"description": "Default model to pass to agy (leave blank for CLI default)."
+				},
+				"antigravity.effort": {
+					"type": "string",
+					"enum": [
+						"",
+						"low",
+						"medium",
+						"high"
+					],
+					"default": "",
+					"description": "Reasoning effort level for agy (low, medium, high)."
+				}
+			}
+		},
+		"commands": [
+			{
+				"command": "antigravity-vscode.editor.open",
+				"title": "Antigravity: Open in New Tab",
+				"icon": "$(layout-sidebar-right-off)"
+			},
+			{
+				"command": "antigravity-vscode.sidebar.open",
+				"title": "Antigravity: Open in Side Bar",
+				"icon": "$(layout-sidebar-right)"
+			},
+			{
+				"command": "antigravity-vscode.terminal.open",
+				"title": "Antigravity: Open in Terminal",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "antigravity-vscode.newConversation",
+				"title": "Antigravity: New Conversation",
+				"icon": "$(add)"
+			},
+			{
+				"command": "antigravity-vscode.acceptProposedDiff",
+				"title": "Antigravity: Accept Proposed Changes",
+				"enablement": "antigravity-vscode.viewingProposedDiff",
+				"icon": "$(check)"
+			},
+			{
+				"command": "antigravity-vscode.rejectProposedDiff",
+				"title": "Antigravity: Reject Proposed Changes",
+				"enablement": "antigravity-vscode.viewingProposedDiff",
+				"icon": "$(discard)"
+			},
+			{
+				"command": "antigravity-vscode.focus",
+				"title": "Antigravity: Focus Input"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "antigravity-vscode.focus",
+				"key": "ctrl+escape",
+				"mac": "cmd+escape",
+				"win": "ctrl+escape",
+				"linux": "ctrl+escape"
+			},
+			{
+				"command": "antigravity-vscode.editor.open",
+				"key": "ctrl+shift+escape",
+				"mac": "cmd+shift+escape",
+				"win": "ctrl+shift+escape",
+				"linux": "ctrl+shift+escape"
+			}
+		],
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "antigravity-sidebar-container",
+					"title": "Antigravity",
+					"icon": "media/antigravity-icon.svg"
+				}
+			]
+		},
+		"views": {
+			"antigravity-sidebar-container": [
+				{
+					"type": "webview",
+					"id": "antigravityVSCodeSidebar",
+					"name": "Antigravity"
+				}
+			]
+		},
+		"menus": {
+			"editor/title": [
+				{
+					"command": "antigravity-vscode.acceptProposedDiff",
+					"when": "antigravity-vscode.viewingProposedDiff",
+					"group": "navigation"
+				},
+				{
+					"command": "antigravity-vscode.rejectProposedDiff",
+					"when": "antigravity-vscode.viewingProposedDiff",
+					"group": "navigation"
+				},
+				{
+					"command": "antigravity-vscode.editor.open",
+					"when": "!config.antigravity.useTerminal",
+					"group": "navigation"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"build": "node esbuild.js",
+		"watch": "node esbuild.js --watch",
+		"package": "vsce package"
+	},
+	"devDependencies": {
+		"@types/marked": "^5.0.2",
+		"@types/node": "^20.10.0",
+		"@types/vscode": "^1.85.0",
+		"@vscode/vsce": "^2.22.0",
+		"esbuild": "^0.19.8",
+		"marked": "^18.0.7",
+		"typescript": "^5.3.3"
+	}
+}
