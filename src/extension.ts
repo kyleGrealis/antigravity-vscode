@@ -19,32 +19,13 @@ export function activate(context: vscode.ExtensionContext) {
   // Commands
   context.subscriptions.push(
     vscode.commands.registerCommand('antigravity-vscode.editor.open', () => {
-      const config = vscode.workspace.getConfiguration('antigravity');
-      const useTerminal = config.get<boolean>('useTerminal');
-      if (useTerminal) {
-        vscode.commands.executeCommand('antigravity-vscode.terminal.open');
-      } else {
-        webviewProvider.createOrShowPanel();
-      }
+      webviewProvider.createOrShowPanel();
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('antigravity-vscode.sidebar.open', () => {
       vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar-container');
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.terminal.open', () => {
-      const config = vscode.workspace.getConfiguration('antigravity');
-      const cliPath = config.get<string>('cliPath') || 'agy';
-      const terminal = vscode.window.createTerminal({
-        name: 'Antigravity CLI',
-        location: vscode.TerminalLocation.Editor,
-        shellPath: cliPath,
-      });
-      terminal.show();
     })
   );
 

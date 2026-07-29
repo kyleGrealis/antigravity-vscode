@@ -79,7 +79,6 @@ let SLASH_COMMANDS: SlashCommand[] = [
       { value: 'high', label: 'High reasoning effort' },
     ]
   },
-  { name: 'terminal', description: 'open agy in terminal mode' },
   { name: 'settings', description: 'open extension settings' },
   { name: 'help', description: 'show available commands' },
 ];
@@ -97,6 +96,8 @@ const input = document.getElementById('prompt-input') as HTMLTextAreaElement;
 const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
 const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
 const newChatBtn = document.getElementById('new-chat-btn') as HTMLButtonElement;
+const historyBtn = document.getElementById('history-btn') as HTMLButtonElement;
+const historyDropdown = document.getElementById('history-dropdown') as HTMLElement;
 const attachImgBtn = document.getElementById('attach-img-btn') as HTMLButtonElement;
 const imageBar = document.getElementById('image-attachment-bar') as HTMLElement;
 const statusEl = document.getElementById('status-text') as HTMLElement;
@@ -232,6 +233,25 @@ newChatBtn?.addEventListener('click', () => {
   currentStreamingMessage = null;
   renderAll();
   vscode.postMessage({ command: 'newConversation' });
+});
+
+historyBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (historyDropdown.style.display === 'block') {
+    historyDropdown.style.display = 'none';
+  } else {
+    historyDropdown.style.display = 'block';
+    historyDropdown.innerHTML = '<div class="history-header">Loading sessions...</div>';
+    vscode.postMessage({ command: 'getSessions' });
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (historyDropdown && historyDropdown.style.display === 'block') {
+    if (!historyDropdown.contains(e.target as Node) && e.target !== historyBtn) {
+      historyDropdown.style.display = 'none';
+    }
+  }
 });
 
 log?.addEventListener('click', (e) => {
@@ -561,8 +581,8 @@ function setBusy(busy: boolean) {
   if (sendBtn) sendBtn.style.display = busy ? 'none' : 'inline';
   if (cancelBtn) cancelBtn.style.display = busy ? 'inline' : 'none';
   if (statusEl) {
-    statusEl.textContent = busy ? 'thinking...' : '';
-    statusEl.className = busy ? 'status-indicator active' : 'status-indicator';
+    statusEl.textContent = busy ? 'thinking...' : 'enter to send, shift+enter for newline';
+    statusEl.className = busy ? 'input-hint status-indicator active' : 'input-hint status-indicator';
   }
 }
 
@@ -809,6 +829,100 @@ function renderAll(autoScrollForce: boolean = false) {
             pre.textContent = String(formattedResult);
           }
           resultBlock.appendChild(pre);
+
+          if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
+            const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
+            const rawCmd = match ? match[1].trim() : '';
+            const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
+
+            const actionBar = document.createElement('div');
+            actionBar.className = 'perm-action-bar';
+            actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
+
+            if (cmd) {
+              const displayCmd = cmd.length > 28 ? cmd.substring(0, 25) + '...' : cmd;
+              const yesBtn = document.createElement('button');
+              yesBtn.className = 'perm-btn perm-btn-primary';
+              yesBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+              yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
+              yesBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                yesBtn.disabled = true;
+                yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
+                if (sessionBtn) sessionBtn.disabled = true;
+                if (noBtn) noBtn.disabled = true;
+
+                currentStreamingMessage = {
+                  id: `a-${Date.now()}`,
+                  role: 'assistant',
+                  text: '',
+                  thinking: '',
+                  toolCalls: [],
+                  isStreaming: true,
+                };
+                messages.push(currentStreamingMessage);
+                renderAll(true);
+                setBusy(true);
+
+                vscode.postMessage({ command: 'permissionResponse', choice: 'yes' });
+              });
+              actionBar.appendChild(yesBtn);
+
+              const sessionBtn = document.createElement('button');
+              sessionBtn.className = 'perm-btn perm-btn-secondary';
+              sessionBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+              sessionBtn.textContent = '✓ Yes for all commands in this session';
+              sessionBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sessionBtn.disabled = true;
+                sessionBtn.textContent = '✓ Yes for session - resuming...';
+                if (yesBtn) yesBtn.disabled = true;
+                if (noBtn) noBtn.disabled = true;
+
+                currentStreamingMessage = {
+                  id: `a-${Date.now()}`,
+                  role: 'assistant',
+                  text: '',
+                  thinking: '',
+                  toolCalls: [],
+                  isStreaming: true,
+                };
+                messages.push(currentStreamingMessage);
+                renderAll(true);
+                setBusy(true);
+
+                vscode.postMessage({ command: 'permissionResponse', choice: 'session' });
+              });
+              actionBar.appendChild(sessionBtn);
+
+              const noBtn = document.createElement('button');
+              noBtn.className = 'perm-btn perm-btn-cancel';
+              noBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+              noBtn.textContent = '✕ No';
+              noBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                noBtn.disabled = true;
+                if (yesBtn) yesBtn.disabled = true;
+                if (sessionBtn) sessionBtn.disabled = true;
+                setBusy(false);
+                vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
+              });
+              actionBar.appendChild(noBtn);
+
+              const copyBtn = document.createElement('button');
+              copyBtn.className = 'perm-btn perm-btn-secondary';
+              copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+              copyBtn.textContent = '📋 Copy Command';
+              copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyTextToClipboard(cmd, copyBtn);
+              });
+              actionBar.appendChild(copyBtn);
+            }
+
+            resultBlock.appendChild(actionBar);
+          }
+
           bodyInner.appendChild(resultBlock);
         }
 
@@ -915,18 +1029,43 @@ function attachCopyButtons(container: HTMLElement) {
   });
 }
 
+function isCopyableInlineCode(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length < 2) return false;
+
+  if (/^(true|false|null|undefined|void|any|string|number|boolean|object|const|let|var|if|else|return|export|import|from|[;,.:{}()\[\]=+-/*<>!&|]+)$/i.test(t)) {
+    return false;
+  }
+
+  if (t.includes(' ') || t.startsWith('-') || t.startsWith('./') || t.startsWith('/') || t.startsWith('\\')) {
+    return true;
+  }
+
+  const cliTools = /^(git|npm|npx|pnpm|yarn|node|python|pip|cargo|docker|kubectl|agy|code|cat|grep|ls|cd|mkdir|rm|cp|mv|find|ssh|curl|wget|bash|powershell|sh)$/i;
+  if (cliTools.test(t)) return true;
+
+  if (/\.[a-zA-Z0-9]+$/.test(t) || t.includes('/')) return true;
+
+  return false;
+}
+
 function attachInlineCodeCopyHandlers(container: HTMLElement) {
   const inlineCodes = container.querySelectorAll('.msg-body code:not(pre code)');
   inlineCodes.forEach((code) => {
     if ((code as HTMLElement).dataset.hasCopyHandler) return;
     (code as HTMLElement).dataset.hasCopyHandler = 'true';
+
+    const text = code.textContent || '';
+    if (!isCopyableInlineCode(text)) return;
+
+    (code as HTMLElement).classList.add('copyable-inline');
     (code as HTMLElement).title = 'Click to copy';
     code.addEventListener('click', (e) => {
       e.stopPropagation();
-      const text = code.textContent || '';
-      if (!text.trim()) return;
+      const textToCopy = code.textContent || '';
+      if (!textToCopy.trim()) return;
 
-      copyTextToClipboard(text.trim());
+      copyTextToClipboard(textToCopy.trim());
       const originalText = code.textContent;
       code.textContent = 'Copied!';
       setTimeout(() => {
@@ -1101,10 +1240,70 @@ function applyDiffHighlighting(container: HTMLElement) {
   });
 }
 
+function renderPermissionPromptCard(promptText?: string) {
+  const log = document.getElementById('chat-messages');
+  if (!log) return;
+
+  const card = document.createElement('div');
+  card.className = 'msg msg-permission-request';
+
+  card.innerHTML = `
+    <div class="permission-card">
+      <div class="permission-header">
+        <span class="permission-icon">&#128737;</span>
+        <span class="permission-title">Permission Required</span>
+      </div>
+      <div class="permission-body">
+        ${promptText ? esc(promptText) : 'Antigravity needs permission to run CLI tools and perform operations on your system. Select how to proceed:'}
+      </div>
+      <div class="permission-actions">
+        <button class="perm-btn perm-btn-primary" data-action="yes">Yes (this command only)</button>
+        <button class="perm-btn perm-btn-secondary" data-action="session">Yes for all commands in this session</button>
+        <button class="perm-btn perm-btn-cancel" data-action="no">No</button>
+      </div>
+    </div>
+  `;
+
+  const buttons = card.querySelectorAll<HTMLButtonElement>('.perm-btn');
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const action = btn.getAttribute('data-action') as 'yes' | 'session' | 'settings' | 'no';
+      
+      buttons.forEach(b => {
+        b.disabled = true;
+        b.style.opacity = '0.5';
+      });
+      btn.style.opacity = '1';
+      btn.style.fontWeight = 'bold';
+
+      const body = card.querySelector('.permission-body');
+      if (action === 'no') {
+        if (body) body.textContent = 'Permission denied. Task cancelled.';
+        setBusy(false);
+      } else {
+        if (body) body.textContent = `Permission granted (${btn.textContent}). Running prompt...`;
+        setBusy(true);
+      }
+
+      vscode.postMessage({
+        command: 'permissionResponse',
+        choice: action,
+      });
+    });
+  });
+
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
+}
+
 window.addEventListener('message', (event) => {
   const data = event.data;
 
   switch (data.type) {
+    case 'permissionRequest':
+      setBusy(false);
+      renderPermissionPromptCard(data.promptText);
+      break;
     case 'textDelta':
       if (currentStreamingMessage) {
         currentStreamingMessage.text += data.delta;
@@ -1153,15 +1352,22 @@ window.addEventListener('message', (event) => {
           if (data.status) existing.status = data.status;
           if (data.result !== undefined && data.result !== null && String(data.result).trim() !== '') {
             existing.result = data.result;
+            if (typeof data.result === 'string' && (data.result.includes('[Permission Required]') || data.result.includes('User denied permission') || data.result.includes('blocked by safety policy'))) {
+              existing.expanded = true;
+            }
+          }
+          if (data.status === 'error') {
+            existing.expanded = true;
           }
         } else {
+          const isPermError = typeof data.result === 'string' && (data.result.includes('[Permission Required]') || data.result.includes('User denied permission') || data.result.includes('blocked by safety policy'));
           currentStreamingMessage.toolCalls.push({
             id: data.id,
             name: (data.name && !isGenericName) ? data.name : 'Tool Execution',
             args: data.args,
             status: data.status || 'done',
             result: data.result,
-            expanded: false,
+            expanded: isPermError || data.status === 'error',
           });
         }
         renderAll();
@@ -1270,11 +1476,82 @@ window.addEventListener('message', (event) => {
         renderImageBar();
       }
       break;
+
+    case 'sessionsList':
+      renderHistoryDropdown(data.sessions, data.currentId);
+      break;
+
+    case 'sessionSelected':
+      messages = [{
+        id: `sys-${Date.now()}`,
+        role: 'assistant',
+        text: `Switched session to ${data.conversationId.substring(0, 8)}. Session permissions reset.`
+      }];
+      currentStreamingMessage = null;
+      renderAll();
+      break;
   }
 });
 
 vscode.postMessage({ command: 'getActiveFile' });
 vscode.postMessage({ command: 'getSlashCommands' });
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function renderHistoryDropdown(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }>, currentId?: string | null) {
+  if (!historyDropdown) return;
+  if (!sessions || sessions.length === 0) {
+    historyDropdown.innerHTML = `
+      <div class="history-header">
+        <span>Session History</span>
+      </div>
+      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+        No previous sessions found.
+      </div>
+    `;
+    return;
+  }
+
+  let html = `
+    <div class="history-header">
+      <span>Session History</span>
+      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${sessions.length} sessions</span>
+    </div>
+  `;
+
+  for (const s of sessions) {
+    const isActive = currentId && currentId === s.id;
+    html += `
+      <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
+        <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
+        <div class="history-item-meta">
+          <span>${s.id.substring(0, 8)}</span>
+          <span>${s.relativeTime}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  historyDropdown.innerHTML = html;
+
+  const items = historyDropdown.querySelectorAll('.history-item');
+  items.forEach((item) => {
+    item.addEventListener('click', () => {
+      const convId = item.getAttribute('data-id');
+      if (convId) {
+        historyDropdown.style.display = 'none';
+        vscode.postMessage({ command: 'selectSession', conversationId: convId });
+      }
+    });
+  });
+}
 
 if (messages.length > 0) {
   renderAll();

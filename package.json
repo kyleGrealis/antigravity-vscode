@@ -38,15 +38,10 @@
 					"default": "agy",
 					"description": "Path or executable name for the Antigravity CLI binary."
 				},
-				"antigravity.useTerminal": {
-					"type": "boolean",
-					"default": false,
-					"description": "Launch Antigravity as an interactive terminal tab in the editor grid instead of the webview."
-				},
 				"antigravity.dangerouslySkipPermissions": {
 					"type": "boolean",
-					"default": true,
-					"description": "Auto-approve all tool permission requests without prompting. Required for webview mode since there is no interactive permission handler."
+					"default": false,
+					"description": "Auto-approve all tool permission requests without prompting. When disabled (recommended), Antigravity will prompt for permission before executing tools."
 				},
 				"antigravity.model": {
 					"type": "string",
@@ -76,11 +71,6 @@
 				"command": "antigravity-vscode.sidebar.open",
 				"title": "Antigravity: Open in Side Bar",
 				"icon": "$(layout-sidebar-right)"
-			},
-			{
-				"command": "antigravity-vscode.terminal.open",
-				"title": "Antigravity: Open in Terminal",
-				"icon": "$(terminal)"
 			},
 			{
 				"command": "antigravity-vscode.newConversation",
@@ -154,7 +144,6 @@
 				},
 				{
 					"command": "antigravity-vscode.editor.open",
-					"when": "!config.antigravity.useTerminal",
 					"group": "navigation"
 				}
 			]

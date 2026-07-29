@@ -84,12 +84,23 @@ html, body {
 }
 
 .status-indicator {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
+  opacity: 0.65;
+  transition: color 0.2s ease, opacity 0.2s ease;
 }
 
 .status-indicator.active {
-  color: var(--vscode-charts-orange, #cca700);
+  color: var(--vscode-editorOverviewRuler-infoForeground, #3794ff);
+  font-weight: 600;
+  opacity: 1;
+  letter-spacing: 0.02em;
+  animation: statusPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .icon-btn {
@@ -393,8 +404,9 @@ html, body {
 }
 
 .tool-json-pre {
+  position: relative;
   background: var(--bg-primary);
-  padding: 6px 8px;
+  padding: 6px 54px 6px 8px;
   border-radius: 4px;
   border: 1px solid var(--border);
   overflow-x: auto;
@@ -402,7 +414,7 @@ html, body {
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 11px;
-  max-height: 400px;
+  max-height: 300px;
   margin: 0;
   color: var(--text-primary);
 }
@@ -567,11 +579,15 @@ html, body {
   padding: 1px 5px;
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: text;
+}
+
+.msg-body code.copyable-inline {
   cursor: pointer;
 }
 
-.msg-body code:hover {
-  background: rgba(255, 255, 255, 0.1);
+.msg-body code.copyable-inline:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .msg-body pre {
@@ -579,7 +595,7 @@ html, body {
   background: var(--vscode-textCodeBlock-background, #181818);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
+  padding: 8px 54px 8px 10px;
   overflow-x: auto;
   margin: 6px 0;
 }
@@ -841,3 +857,159 @@ html, body {
 .attach-btn {
   font-size: 14px;
 }
+
+/* Permission Request Card */
+.msg-permission-request {
+  margin: 12px 4px;
+  padding: 0 !important;
+  border-bottom: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.permission-card {
+  background: var(--vscode-input-background, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--vscode-editorOverviewRuler-warningForeground, #cca700);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.permission-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.permission-icon {
+  font-size: 16px;
+}
+
+.permission-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--vscode-editorOverviewRuler-warningForeground, #cca700);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.permission-body {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.permission-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.perm-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.perm-btn-primary {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.perm-btn-primary:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.perm-btn-secondary {
+  background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.1));
+  color: var(--vscode-button-secondaryForeground, #ffffff);
+  border: 1px solid var(--border);
+}
+
+.perm-btn-secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.18));
+}
+
+.perm-btn-cancel {
+  background: transparent;
+  color: var(--vscode-errorForeground, #f48771);
+  border: 1px solid var(--vscode-errorForeground, #f48771);
+}
+
+.perm-btn-cancel:hover {
+  background: rgba(244, 135, 113, 0.15);
+}
+
+/* History Dropdown */
+.history-dropdown {
+  position: absolute;
+  top: 36px;
+  right: 12px;
+  width: 300px;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.history-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.history-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background 0.1s ease;
+}
+
+.history-item:hover {
+  background: var(--bg-hover);
+}
+
+.history-item.active {
+  background: var(--bg-active);
+}
+
+.history-item-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-item-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  display: flex;
+  justify-content: space-between;
+}
+
+

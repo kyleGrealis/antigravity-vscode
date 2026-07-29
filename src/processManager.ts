@@ -66,7 +66,7 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--effort', options.effort.trim());
     }
 
-    if (options.dangerouslySkipPermissions !== false) {
+    if (options.dangerouslySkipPermissions === true) {
       args.push('--dangerously-skip-permissions');
     }
 
