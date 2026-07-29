@@ -5,6 +5,10 @@
 	"version": "0.1.2",
 	"publisher": "antigravity",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/kyleGrealis/antigravity-vscode.git"
+	},
 	"icon": "media/antigravity-icon.png",
 	"engines": {
 		"vscode": "^1.85.0"
