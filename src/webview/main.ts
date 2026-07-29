@@ -6,8 +6,12 @@ declare function acquireVsCodeApi(): any;
 const vscode = acquireVsCodeApi();
 
 interface ToolCall {
+  id?: string | number;
   name: string;
   args?: Record<string, any>;
+  result?: string;
+  status?: 'running' | 'done' | 'error';
+  expanded?: boolean;
 }
 
 interface Message {
@@ -350,13 +354,71 @@ function setBusy(busy: boolean) {
   }
 }
 
-function formatToolArgs(tc: ToolCall): { text: string; isFile: boolean } {
-  if (!tc.args) return { text: '', isFile: false };
-  const file = tc.args.TargetFile || tc.args.targetFile || tc.args.file_path || tc.args.path || '';
-  if (file) return { text: file, isFile: true };
-  const keys = Object.keys(tc.args);
+function toPascalCaseName(name: string): string {
+  if (!name) return 'Tool';
+  const nameMap: Record<string, string> = {
+    list_dir: 'ListDir',
+    list_directory: 'ListDir',
+    view_file: 'ReadFile',
+    read_file: 'ReadFile',
+    run_command: 'RunCommand',
+    grep_search: 'GrepSearch',
+    replace_file_content: 'ReplaceFileContent',
+    multi_replace_file_content: 'MultiReplaceFileContent',
+    write_to_file: 'WriteFile',
+    search_web: 'SearchWeb',
+    read_url_content: 'ReadUrl',
+    ask_question: 'AskQuestion',
+    ask_permission: 'AskPermission',
+  };
+  const key = name.toLowerCase();
+  if (nameMap[key]) return nameMap[key];
+  return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+}
+
+function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
+  let args = tc.args;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch {}
+  }
+  if (!args || (typeof args === 'object' && Object.keys(args).length === 0)) {
+    if (tc.result && typeof tc.result === 'string') {
+      const firstLine = tc.result.trim().split('\n')[0];
+      if (firstLine) return { text: firstLine.slice(0, 60), isFile: false };
+    }
+    return { text: '', isFile: false };
+  }
+  if (typeof args !== 'object') return { text: String(args), isFile: false };
+
+  const cmd = args.CommandLine || args.command || args.cmd || args.CommandLineString || args.script;
+  if (cmd) {
+    const cleanCmd = String(cmd).replace(/^"|"$/g, '');
+    return { text: cleanCmd, isFile: false };
+  }
+
+  const file = args.TargetFile || args.targetFile || args.file_path || args.path || args.SearchPath || args.AbsolutePath || args.DirectoryPath || args.target_file || args.file;
+  if (file) {
+    const cleanFile = String(file).replace(/^"|"$/g, '');
+    return { text: cleanFile, isFile: true };
+  }
+
+  const query = args.Query || args.query || args.pattern || args.Prompt || args.prompt;
+  if (query) {
+    const cleanQuery = String(query).replace(/^"|"$/g, '');
+    return { text: `"${cleanQuery}"`, isFile: false };
+  }
+
+  const url = args.Url || args.url || args.URI || args.uri;
+  if (url) {
+    return { text: String(url), isFile: false };
+  }
+
+  const keys = Object.keys(args);
   if (keys.length === 0) return { text: '', isFile: false };
-  return { text: keys.slice(0, 2).map(k => `${k}: ${String(tc.args![k]).slice(0, 40)}`).join(', '), isFile: false };
+  return {
+    text: keys.slice(0, 2).map(k => `${k}: ${String(args[k]).replace(/^"|"$/g, '').slice(0, 30)}`).join(', '),
+    isFile: false
+  };
 }
 
 function renderAll() {
@@ -373,26 +435,138 @@ function renderAll() {
     el.appendChild(role);
 
     if (msg.role === 'assistant' && msg.thinking && msg.thinking.trim()) {
-      el.appendChild(renderThinking(msg.thinking));
+      el.appendChild(renderThinking(msg.thinking, msg.isStreaming));
     }
 
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       const toolSection = document.createElement('div');
       toolSection.className = 'tool-section';
+
       for (const tc of msg.toolCalls) {
-        const item = document.createElement('div');
-        item.className = 'tool-item';
-        item.innerHTML = `<span class="tool-icon">></span><span class="tool-name">${esc(tc.name)}</span>`;
-        const detail = formatToolArgs(tc);
-        if (detail.text) {
-          if (detail.isFile) {
-            item.innerHTML += `<span class="tool-detail clickable-file" data-path="${esc(detail.text)}" title="Click to open in editor">${esc(detail.text)}</span>`;
+        const accordion = document.createElement('div');
+        accordion.className = 'tool-accordion';
+
+        const header = document.createElement('div');
+        header.className = 'tool-header';
+
+        const statusIcon = document.createElement('span');
+        const statusClass = tc.status || 'done';
+        statusIcon.className = `tool-status-icon ${statusClass}`;
+        statusIcon.innerHTML = statusClass === 'running' ? '&#9696;' : statusClass === 'error' ? '&#10007;' : '&#9679;';
+
+        const callSigEl = document.createElement('span');
+        callSigEl.className = 'tool-call-sig';
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'tool-name';
+        nameEl.textContent = toPascalCaseName(tc.name);
+        callSigEl.appendChild(nameEl);
+
+        const summary = formatToolSummary(tc);
+        const argsText = summary.text ? summary.text : '';
+
+        if (argsText) {
+          const summaryEl = document.createElement('span');
+          summaryEl.className = 'tool-summary';
+          if (summary.isFile) {
+            summaryEl.innerHTML = `(<span class="clickable-file" data-path="${esc(argsText)}" title="Click to open in editor">${esc(argsText)}</span>)`;
           } else {
-            item.innerHTML += `<span class="tool-detail">${esc(detail.text)}</span>`;
+            summaryEl.textContent = `(${argsText})`;
           }
+          callSigEl.appendChild(summaryEl);
         }
-        toolSection.appendChild(item);
+
+        const hintEl = document.createElement('span');
+        hintEl.className = 'tool-expand-hint';
+        hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
+
+        header.appendChild(statusIcon);
+        header.appendChild(callSigEl);
+        header.appendChild(hintEl);
+
+        const body = document.createElement('div');
+        body.className = `tool-body${tc.expanded ? ' open' : ''}`;
+
+        let hasContent = false;
+
+        if (tc.args && (typeof tc.args === 'string' || Object.keys(tc.args).length > 0)) {
+          hasContent = true;
+          const argsBlock = document.createElement('div');
+          argsBlock.className = 'tool-args-block';
+          const title = document.createElement('div');
+          title.className = 'tool-block-title';
+          title.textContent = 'Arguments';
+          argsBlock.appendChild(title);
+
+          const pre = document.createElement('pre');
+          pre.className = 'tool-json-pre';
+          let formattedArgs = tc.args;
+          if (typeof formattedArgs === 'string') {
+            try {
+              const parsed = JSON.parse(formattedArgs);
+              formattedArgs = JSON.stringify(parsed, null, 2);
+            } catch {}
+          } else {
+            formattedArgs = JSON.stringify(formattedArgs, null, 2);
+          }
+          pre.textContent = formattedArgs;
+          argsBlock.appendChild(pre);
+          body.appendChild(argsBlock);
+        }
+
+        if (tc.result !== undefined && tc.result !== null && String(tc.result).trim() !== '') {
+          hasContent = true;
+          const resultBlock = document.createElement('div');
+          resultBlock.className = 'tool-result-block';
+          const title = document.createElement('div');
+          title.className = 'tool-block-title';
+          title.textContent = 'Output';
+          resultBlock.appendChild(title);
+
+          const pre = document.createElement('pre');
+          pre.className = 'tool-json-pre';
+          let formattedResult = tc.result;
+          if (typeof formattedResult === 'string') {
+            try {
+              const parsed = JSON.parse(formattedResult);
+              formattedResult = JSON.stringify(parsed, null, 2);
+            } catch {}
+          } else {
+            formattedResult = JSON.stringify(formattedResult, null, 2);
+          }
+          if (typeof formattedResult === 'string') {
+            pre.innerHTML = renderDiffOrTextHtml(formattedResult);
+          } else {
+            pre.textContent = String(formattedResult);
+          }
+          resultBlock.appendChild(pre);
+          body.appendChild(resultBlock);
+        }
+
+        if (!hasContent) {
+          const emptyInfo = document.createElement('div');
+          emptyInfo.className = 'tool-empty-info';
+          emptyInfo.style.color = 'var(--text-secondary)';
+          emptyInfo.style.fontStyle = 'italic';
+          emptyInfo.style.fontSize = '11px';
+          emptyInfo.textContent = 'No detailed arguments or output recorded.';
+          body.appendChild(emptyInfo);
+        }
+
+        header.addEventListener('click', (e) => {
+          const target = e.target as HTMLElement;
+          if (target.classList.contains('clickable-file')) return;
+
+          tc.expanded = !tc.expanded;
+          hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
+          body.classList.toggle('open', tc.expanded);
+        });
+
+        accordion.appendChild(header);
+        accordion.appendChild(body);
+        toolSection.appendChild(accordion);
       }
+
       el.appendChild(toolSection);
     }
 
@@ -400,6 +574,7 @@ function renderAll() {
     body.className = 'msg-body';
     if (msg.role === 'assistant' && msg.text) {
       body.innerHTML = marked.parse(msg.text) as string;
+      applyDiffHighlighting(body);
       if (msg.isStreaming) {
         body.classList.add('streaming-cursor');
       }
@@ -426,14 +601,15 @@ function renderAll() {
   vscode.setState({ messages: toSave });
 }
 
-function renderThinking(text: string): HTMLElement {
+function renderThinking(text: string, isStreaming?: boolean): HTMLElement {
   const section = document.createElement('div');
   section.className = 'thinking-section';
 
   const toggle = document.createElement('button');
   toggle.className = 'thinking-toggle';
-  const lines = text.split('\n').length;
-  toggle.innerHTML = `<span class="thinking-chevron">&#9656;</span> thinking (${lines} lines)`;
+  const lines = text.trim().split('\n').length;
+  const statusLabel = isStreaming ? 'thinking...' : `thinking (${lines} line${lines === 1 ? '' : 's'})`;
+  toggle.innerHTML = `<span class="thinking-chevron">&#9656;</span> ${esc(statusLabel)}`;
 
   const body = document.createElement('div');
   body.className = 'thinking-body';
@@ -453,6 +629,61 @@ function esc(s: string): string {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+function isDiffText(text: string): boolean {
+  const lines = text.split('\n');
+  let hasAdd = false;
+  let hasDel = false;
+  let hasHdr = false;
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git') || line.startsWith('index ') || (line.startsWith('--- ') && lines.some(l => l.startsWith('+++ ')))) {
+      hasHdr = true;
+    }
+    if (/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line)) {
+      hasHdr = true;
+    }
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      hasAdd = true;
+    }
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      hasDel = true;
+    }
+  }
+
+  return hasHdr || (hasAdd && hasDel) || (hasAdd && lines.length <= 15) || (hasDel && lines.length <= 15);
+}
+
+function renderDiffOrTextHtml(text: string): string {
+  if (!isDiffText(text)) {
+    return esc(text);
+  }
+
+  const lines = text.split('\n');
+  return lines.map(line => {
+    const escaped = esc(line);
+    if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+      return `<span class="diff-header">${escaped}</span>`;
+    } else if (/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line) || line.startsWith('@@ ')) {
+      return `<span class="diff-info">${escaped}</span>`;
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      return `<span class="diff-add">${escaped}</span>`;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      return `<span class="diff-del">${escaped}</span>`;
+    }
+    return escaped;
+  }).join('\n');
+}
+
+function applyDiffHighlighting(container: HTMLElement) {
+  const codeBlocks = container.querySelectorAll('pre code');
+  codeBlocks.forEach((block) => {
+    const text = block.textContent || '';
+    if (block.classList.contains('language-diff') || isDiffText(text)) {
+      block.innerHTML = renderDiffOrTextHtml(text);
+    }
+  });
 }
 
 window.addEventListener('message', (event) => {
@@ -476,7 +707,41 @@ window.addEventListener('message', (event) => {
     case 'toolCall':
       if (currentStreamingMessage) {
         if (!currentStreamingMessage.toolCalls) currentStreamingMessage.toolCalls = [];
-        currentStreamingMessage.toolCalls.push({ name: data.name, args: data.args });
+        
+        let existing = data.id !== undefined && data.id !== null
+          ? currentStreamingMessage.toolCalls.find(tc => tc.id === data.id)
+          : null;
+
+        if (!existing && data.name) {
+          existing = currentStreamingMessage.toolCalls.find(
+            tc => tc.name.toLowerCase() === data.name.toLowerCase() && (tc.status === 'running' || !tc.result || !tc.args)
+          ) || null;
+        }
+
+        if (existing) {
+          if (data.id) existing.id = data.id;
+          if (data.name) existing.name = data.name;
+          if (data.args && (typeof data.args === 'string' || (typeof data.args === 'object' && Object.keys(data.args).length > 0))) {
+            if (typeof existing.args === 'object' && typeof data.args === 'object') {
+              existing.args = { ...existing.args, ...data.args };
+            } else {
+              existing.args = data.args;
+            }
+          }
+          if (data.status) existing.status = data.status;
+          if (data.result !== undefined && data.result !== null && String(data.result).trim() !== '') {
+            existing.result = data.result;
+          }
+        } else {
+          currentStreamingMessage.toolCalls.push({
+            id: data.id,
+            name: data.name,
+            args: data.args,
+            status: data.status || 'done',
+            result: data.result,
+            expanded: false,
+          });
+        }
         renderAll();
       }
       break;
@@ -494,6 +759,15 @@ window.addEventListener('message', (event) => {
         if (!currentStreamingMessage.text && data.response && data.response.trim().length > 0) {
           currentStreamingMessage.text = data.response;
         }
+        if (
+          !currentStreamingMessage.text &&
+          (!currentStreamingMessage.thinking || !currentStreamingMessage.thinking.trim()) &&
+          (!currentStreamingMessage.toolCalls || currentStreamingMessage.toolCalls.length === 0)
+        ) {
+          if (data.status === 'ERROR' || data.status === 'FAILURE') {
+            currentStreamingMessage.text = '[Response failed]';
+          }
+        }
         if (data.usage) {
           currentStreamingMessage.tokens = data.usage;
         }
@@ -506,7 +780,9 @@ window.addEventListener('message', (event) => {
     case 'error':
       setBusy(false);
       if (currentStreamingMessage) {
-        currentStreamingMessage.text += `\n[error: ${data.error}]`;
+        currentStreamingMessage.text = currentStreamingMessage.text
+          ? `${currentStreamingMessage.text}\n[error: ${data.error}]`
+          : `[error: ${data.error}]`;
         currentStreamingMessage.isStreaming = false;
       }
       currentStreamingMessage = null;

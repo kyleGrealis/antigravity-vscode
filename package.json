@@ -5,6 +5,7 @@
 	"version": "0.1.2",
 	"publisher": "antigravity",
 	"license": "MIT",
+	"icon": "media/antigravity-icon.png",
 	"engines": {
 		"vscode": "^1.85.0"
 	},
@@ -96,7 +97,8 @@
 			},
 			{
 				"command": "antigravity-vscode.focus",
-				"title": "Antigravity: Focus Input"
+				"title": "Antigravity: Focus Input",
+				"icon": "$(keyboard)"
 			}
 		],
 		"keybindings": [
@@ -129,7 +131,8 @@
 				{
 					"type": "webview",
 					"id": "antigravityVSCodeSidebar",
-					"name": "Antigravity"
+					"name": "Antigravity",
+					"icon": "media/antigravity-icon.svg"
 				}
 			]
 		},

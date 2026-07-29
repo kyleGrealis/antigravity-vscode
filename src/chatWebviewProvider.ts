@@ -6,6 +6,50 @@ import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
 
+function cleanToolArgs(rawArgs: any): Record<string, any> | undefined {
+  if (!rawArgs) return undefined;
+  let parsed = rawArgs;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      // not JSON
+    }
+  }
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      // not JSON
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return typeof rawArgs === 'string' && rawArgs.trim() ? { arg: rawArgs.trim() } : undefined;
+  }
+  const cleanedArgs: Record<string, any> = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof v === 'string') {
+      let valStr = v.trim();
+      if ((valStr.startsWith('"') && valStr.endsWith('"')) || (valStr.startsWith('{') && valStr.endsWith('}')) || (valStr.startsWith('[') && valStr.endsWith(']'))) {
+        try {
+          cleanedArgs[k] = JSON.parse(valStr);
+        } catch {
+          if (valStr.startsWith('"') && valStr.endsWith('"') && valStr.length >= 2) {
+            cleanedArgs[k] = valStr.slice(1, -1);
+          } else {
+            cleanedArgs[k] = valStr;
+          }
+        }
+      } else {
+        cleanedArgs[k] = v;
+      }
+    } else {
+      cleanedArgs[k] = v;
+    }
+  }
+  return Object.keys(cleanedArgs).length > 0 ? cleanedArgs : undefined;
+}
+
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'antigravityVSCodeSidebar';
   private view?: vscode.WebviewView;
@@ -130,8 +174,17 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       if (!matches) return;
       const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
       const buffer = Buffer.from(matches[2], 'base64');
-      const tmpDir = os.tmpdir();
-      const filePath = path.join(tmpDir, `agy_paste_${Date.now()}.${ext}`);
+      
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      let saveDir = os.tmpdir();
+      if (workspaceFolders && workspaceFolders.length > 0) {
+        saveDir = path.join(workspaceFolders[0].uri.fsPath, '.antigravity');
+        if (!fs.existsSync(saveDir)) {
+          fs.mkdirSync(saveDir, { recursive: true });
+        }
+      }
+
+      const filePath = path.join(saveDir, `agy_paste_${Date.now()}.${ext}`).replace(/\\/g, '/');
       fs.writeFileSync(filePath, buffer);
       webview.postMessage({ type: 'imagesAttached', paths: [filePath] });
     } catch (err) {
@@ -247,13 +300,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const cwd = this.resolveWorkingDirectory();
     const isFirstTurn = !this.processManager.getConversationId();
 
-    const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, images);
+    const normalizedImages = images?.map((img) => img.replace(/\\/g, '/'));
+
+    const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
 
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
       model,
       effort,
       dangerouslySkipPermissions,
-      images,
+      images: normalizedImages,
     });
   }
 
@@ -261,8 +316,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const parts: string[] = [];
 
     if (images && images.length > 0) {
-      const imageList = images.map(img => `[Attached Image File: ${img}]`).join('\n');
-      parts.push(`Please inspect and analyze the attached image file(s) using your image/file viewing tools:\n${imageList}`);
+      const imageList = images.map((img) => `- ${path.resolve(img).replace(/\\/g, '/')}`).join('\n');
+      parts.push(
+        `[ATTACHED IMAGES]\nThe user attached the following image file(s):\n${imageList}\n\nIMPORTANT: You MUST call your \`view_file\` tool on the attached image file path(s) to inspect and view the image content before responding.`
+      );
     }
 
     const editor = vscode.window.activeTextEditor;
@@ -299,46 +356,136 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const webviews = this.getWebviews();
 
     if (event.event === 'step_update' && event.step_update) {
-      const step = event.step_update;
+      const step = event.step_update as any;
+      const stepType = (step.step_type || step.type || '').toLowerCase();
 
-      if (step.step_type === 'thinking') {
-        if (step.text_delta) {
-          webviews.forEach((wv) =>
-            wv.postMessage({
-              type: 'thinkingDelta',
-              delta: step.text_delta,
-            })
-          );
-        }
-      } else if (step.text_delta) {
+      const isThinkingStep =
+        stepType === 'thinking' ||
+        stepType === 'thought' ||
+        stepType === 'reasoning';
+
+      const thinkingDelta =
+        (isThinkingStep ? (step.text_delta || step.delta || step.text || step.content || step.thinking_delta || step.reasoning_content || step.thinking || step.thought) : null) ||
+        step.thinking_delta ||
+        step.reasoning_content ||
+        step.thinking ||
+        step.thought;
+
+      if (thinkingDelta) {
         webviews.forEach((wv) =>
           wv.postMessage({
-            type: 'textDelta',
-            delta: step.text_delta,
+            type: 'thinkingDelta',
+            delta: thinkingDelta,
           })
         );
       }
 
-      if (step.step_type === 'tool_call') {
+      const toolInfo = step.tool_info || {};
+
+      const toolNameRaw = step.tool_name || toolInfo.name || step.tool || step.name || (step.tool_calls && step.tool_calls[0]?.name) || (step.tool_calls && step.tool_calls[0]?.tool_name);
+      const isKnownToolType = [
+        'run_command', 'view_file', 'grep_search', 'list_directory', 'list_dir',
+        'replace_file_content', 'multi_replace_file_content', 'write_to_file',
+        'ask_question', 'ask_permission', 'read_url_content', 'search_web',
+        'invoke_subagent', 'define_subagent', 'send_message', 'manage_task',
+        'manage_subagents', 'schedule', 'generate_image'
+      ].includes(stepType);
+
+      const isToolCall =
+        stepType === 'tool' ||
+        stepType === 'tool_call' ||
+        stepType === 'tool_use' ||
+        isKnownToolType ||
+        !!toolNameRaw ||
+        (Array.isArray(step.tool_calls) && step.tool_calls.length > 0);
+
+      if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) {
+        step.tool_calls.forEach((tcItem: any, idx: number) => {
+          let toolName = tcItem.name || tcItem.tool_name || tcItem.function?.name || stepType || 'Tool Execution';
+          toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
+
+          let rawArgs = tcItem.args || tcItem.tool_args || tcItem.input || tcItem.parameters || tcItem.function?.arguments;
+          let toolArgs = cleanToolArgs(rawArgs);
+
+          let rawError = toolInfo.error || step.error || tcItem.error;
+          let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
+
+          let toolResult = tcItem.result || tcItem.output || toolInfo.output || step.content || step.output || step.result || step.text || (errorMessage ? `[Error] ${errorMessage}` : undefined);
+          const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
+          const toolId = tcItem.id || tcItem.tool_call_id || tcItem.call_id || (step.step_index !== undefined ? `step_${step.step_index}_${idx}` : `${toolName}_${idx}`);
+
+          webviews.forEach((wv) =>
+            wv.postMessage({
+              type: 'toolCall',
+              id: toolId,
+              name: toolName,
+              args: toolArgs,
+              status: toolStatus,
+              result: toolResult,
+            })
+          );
+
+          if (
+            (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
+            toolArgs
+          ) {
+            const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
+            const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
+            if (targetFile && content) {
+              this.diffController.showDiff(targetFile, content);
+            }
+          }
+        });
+      } else if (isToolCall) {
+        let toolName = toolNameRaw || stepType || 'Tool Execution';
+        toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
+
+        let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args;
+        let toolArgs = cleanToolArgs(rawArgs);
+
+        let rawError = toolInfo.error || step.error;
+        let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
+
+        let toolResult = toolInfo.output || step.content || step.output || step.result || step.text || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
+        const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
+        const toolId = step.tool_call_id || step.call_id || step.id || (step.step_index !== undefined ? `step_${step.step_index}` : toolName);
+
         webviews.forEach((wv) =>
           wv.postMessage({
             type: 'toolCall',
-            name: step.tool_name || 'Tool Execution',
-            args: step.tool_args,
+            id: toolId,
+            name: toolName,
+            args: toolArgs,
+            status: toolStatus,
+            result: toolResult,
           })
         );
 
-        // Handle tool calls proposing edits for diff review
         if (
-          (step.tool_name === 'replace_file_content' || step.tool_name === 'write_to_file') &&
-          step.tool_args
+          (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
+          toolArgs
         ) {
-          const targetFile = step.tool_args.TargetFile || step.tool_args.targetFile;
-          const content = step.tool_args.ReplacementContent || step.tool_args.CodeContent || '';
+          const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
+          const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
           if (targetFile && content) {
             this.diffController.showDiff(targetFile, content);
           }
         }
+      }
+
+      const textDelta = step.text_delta || step.delta || step.text || step.content;
+      if (
+        !isThinkingStep &&
+        !isToolCall &&
+        stepType !== 'user_input' &&
+        textDelta
+      ) {
+        webviews.forEach((wv) =>
+          wv.postMessage({
+            type: 'textDelta',
+            delta: textDelta,
+          })
+        );
       }
 
       if (step.state === 'DONE' && step.usage) {
@@ -350,12 +497,20 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         );
       }
     } else if (event.event === 'result' && event.result) {
+      const resultObj = event.result as any;
+      const responseText =
+        resultObj.response ||
+        resultObj.text ||
+        resultObj.content ||
+        resultObj.output ||
+        '';
+
       webviews.forEach((wv) =>
         wv.postMessage({
           type: 'result',
-          status: event.result?.status,
-          response: event.result?.response,
-          usage: event.result?.usage,
+          status: resultObj.status,
+          response: responseText,
+          usage: resultObj.usage,
         })
       );
     } else if (event.event === 'error') {
