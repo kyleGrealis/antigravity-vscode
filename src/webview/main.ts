@@ -8,7 +8,7 @@ const vscode = acquireVsCodeApi();
 interface ToolCall {
   id?: string | number;
   name: string;
-  args?: Record<string, any>;
+  args?: Record<string, any> | string;
   result?: string;
   status?: 'running' | 'done' | 'error';
   expanded?: boolean;
@@ -39,6 +39,7 @@ interface SlashCommand {
   description: string;
   hasArg?: boolean;
   argHint?: string;
+  isSkill?: boolean;
   options?: SlashOption[];
 }
 
@@ -47,10 +48,11 @@ interface SlashDisplayItem {
   displayName: string;
   description: string;
   hasArg?: boolean;
+  isSkill?: boolean;
   insertValue?: string;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
+let SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', description: 'start a new conversation' },
   { name: 'clear', description: 'clear chat history' },
   { 
@@ -311,6 +313,7 @@ function updateSlashMenu() {
     displayName: `/${c.name}`,
     description: c.description + (c.argHint ? ` ${c.argHint}` : ''),
     hasArg: c.hasArg,
+    isSkill: c.isSkill,
   }));
   slashMenuIndex = 0;
   renderSlashMenu();
@@ -323,7 +326,8 @@ function renderSlashMenu() {
   slashFiltered.forEach((cmd, i) => {
     const row = document.createElement('div');
     row.className = 'slash-item' + (i === slashMenuIndex ? ' active' : '');
-    row.innerHTML = `<span class="slash-name">${esc(cmd.displayName)}</span><span class="slash-desc">${esc(cmd.description)}</span>`;
+    const badgeHtml = cmd.isSkill ? `<span class="slash-badge">skill</span>` : '';
+    row.innerHTML = `<span class="slash-name">${esc(cmd.displayName)}</span>${badgeHtml}<span class="slash-desc">${esc(cmd.description)}</span>`;
     row.addEventListener('mouseenter', () => {
       slashMenuIndex = i;
       const items = slashMenu.querySelectorAll('.slash-item');
@@ -598,6 +602,15 @@ function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   }
   if (typeof args !== 'object') return { text: String(args), isFile: false };
 
+  const action = args.Action || args.action;
+  const target = args.Target || args.target;
+  if (action || target) {
+    const parts: string[] = [];
+    if (action) parts.push(`Action: ${action}`);
+    if (target) parts.push(`Target: ${target}`);
+    return { text: parts.join(', '), isFile: false };
+  }
+
   const cmd = args.CommandLine || args.command || args.cmd || args.CommandLineString || args.script;
   if (cmd) {
     const cleanCmd = String(cmd).replace(/^"|"$/g, '');
@@ -706,10 +719,35 @@ function renderAll(autoScrollForce: boolean = false) {
           hasContent = true;
           const diffBlock = document.createElement('div');
           diffBlock.className = 'tool-diff-block';
+
+          const diffHeader = document.createElement('div');
+          diffHeader.className = 'tool-block-header';
+
           const title = document.createElement('div');
           title.className = 'tool-block-title';
           title.textContent = 'Changes (Diff)';
-          diffBlock.appendChild(title);
+          diffHeader.appendChild(title);
+
+          const argsObj = typeof tc.args === 'object' && tc.args !== null ? (tc.args as Record<string, any>) : undefined;
+          const targetFile = argsObj?.TargetFile || argsObj?.targetFile || argsObj?.target_file || argsObj?.path || argsObj?.file;
+          if (targetFile) {
+            const openDiffBtn = document.createElement('button');
+            openDiffBtn.className = 'open-diff-btn';
+            openDiffBtn.textContent = 'Compare in Editor ↗';
+            openDiffBtn.title = 'Open side-by-side diff in editor grid';
+            openDiffBtn.onclick = (e) => {
+              e.stopPropagation();
+              vscode.postMessage({
+                command: 'openDiffView',
+                targetFile: targetFile,
+                toolName: tc.name,
+                toolArgs: tc.args,
+              });
+            };
+            diffHeader.appendChild(openDiffBtn);
+          }
+
+          diffBlock.appendChild(diffHeader);
 
           const pre = document.createElement('pre');
           pre.className = 'tool-json-pre';
@@ -718,7 +756,7 @@ function renderAll(autoScrollForce: boolean = false) {
           bodyInner.appendChild(diffBlock);
         }
 
-        if (tc.args && (typeof tc.args === 'string' || Object.keys(tc.args).length > 0)) {
+        if (tc.args && (typeof tc.args === 'string' || (typeof tc.args === 'object' && Object.keys(tc.args).length > 0))) {
           hasContent = true;
           const argsBlock = document.createElement('div');
           argsBlock.className = 'tool-args-block';
@@ -729,14 +767,16 @@ function renderAll(autoScrollForce: boolean = false) {
 
           const pre = document.createElement('pre');
           pre.className = 'tool-json-pre';
-          let formattedArgs = tc.args;
-          if (typeof formattedArgs === 'string') {
+          let formattedArgs = '';
+          if (typeof tc.args === 'string') {
             try {
-              const parsed = JSON.parse(formattedArgs);
+              const parsed = JSON.parse(tc.args);
               formattedArgs = JSON.stringify(parsed, null, 2);
-            } catch {}
+            } catch {
+              formattedArgs = tc.args;
+            }
           } else {
-            formattedArgs = JSON.stringify(formattedArgs, null, 2);
+            formattedArgs = JSON.stringify(tc.args, null, 2);
           }
           pre.textContent = formattedArgs;
           argsBlock.appendChild(pre);
@@ -791,6 +831,11 @@ function renderAll(autoScrollForce: boolean = false) {
           tc.expanded = !tc.expanded;
           hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
           body.classList.toggle('open', tc.expanded);
+          if (tc.expanded) {
+            setTimeout(() => {
+              accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }, 100);
+          }
         });
 
         accordion.appendChild(header);
@@ -798,11 +843,6 @@ function renderAll(autoScrollForce: boolean = false) {
         toolSection.appendChild(accordion);
       }
       el.appendChild(toolSection);
-      requestAnimationFrame(() => {
-        if (autoScrollForce || wasAtBottom) {
-          toolSection.scrollTop = toolSection.scrollHeight;
-        }
-      });
     }
 
     const body = document.createElement('div');
@@ -830,6 +870,9 @@ function renderAll(autoScrollForce: boolean = false) {
     log.appendChild(el);
   }
 
+  attachCopyButtons(log);
+  attachInlineCodeCopyHandlers(log);
+
   requestAnimationFrame(() => {
     if (autoScrollForce || wasAtBottom) {
       log.scrollTop = log.scrollHeight;
@@ -838,6 +881,80 @@ function renderAll(autoScrollForce: boolean = false) {
 
   const toSave = messages.filter(m => !m.isStreaming);
   vscode.setState({ messages: toSave });
+}
+
+function attachCopyButtons(container: HTMLElement) {
+  const preElements = container.querySelectorAll('pre');
+  preElements.forEach((pre) => {
+    if (pre.querySelector('.copy-code-btn')) return;
+
+    pre.style.position = 'relative';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-code-btn';
+    copyBtn.type = 'button';
+    copyBtn.title = 'Copy code block';
+    copyBtn.textContent = 'Copy';
+
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      let textToCopy = '';
+      const codeEl = pre.querySelector('code');
+      if (codeEl) {
+        textToCopy = codeEl.textContent || '';
+      } else {
+        const clone = pre.cloneNode(true) as HTMLElement;
+        const btnInClone = clone.querySelector('.copy-code-btn');
+        if (btnInClone) btnInClone.remove();
+        textToCopy = clone.textContent || '';
+      }
+      copyTextToClipboard(textToCopy.trim(), copyBtn);
+    });
+
+    pre.appendChild(copyBtn);
+  });
+}
+
+function attachInlineCodeCopyHandlers(container: HTMLElement) {
+  const inlineCodes = container.querySelectorAll('.msg-body code:not(pre code)');
+  inlineCodes.forEach((code) => {
+    if ((code as HTMLElement).dataset.hasCopyHandler) return;
+    (code as HTMLElement).dataset.hasCopyHandler = 'true';
+    (code as HTMLElement).title = 'Click to copy';
+    code.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = code.textContent || '';
+      if (!text.trim()) return;
+
+      copyTextToClipboard(text.trim());
+      const originalText = code.textContent;
+      code.textContent = 'Copied!';
+      setTimeout(() => {
+        code.textContent = originalText;
+      }, 1000);
+    });
+  });
+}
+
+function copyTextToClipboard(text: string, btn?: HTMLButtonElement) {
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {
+      vscode.postMessage({ type: 'copyToClipboard', text });
+    });
+  } else {
+    vscode.postMessage({ type: 'copyToClipboard', text });
+  }
+
+  if (btn) {
+    const originalText = btn.textContent || 'Copy';
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.classList.remove('copied');
+    }, 1500);
+  }
 }
 
 function renderThinking(text: string, isStreaming?: boolean): HTMLElement {
@@ -903,49 +1020,50 @@ function buildDiffFromToolArgs(toolName: string, rawArgs: any): string | null {
   if (typeof args !== 'object' || !args) return null;
 
   const name = toolName.toLowerCase();
-  const file = args.TargetFile || args.targetFile || args.path || args.file || '';
-  const fileName = file ? file.split(/[\/\\]/).pop() : 'file';
+  const normName = name.replace(/[-_]/g, '');
+  const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
+  const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
 
   let diffLines: string[] = [];
 
-  if (name.includes('replace_file_content') && !name.includes('multi')) {
-    const target = args.TargetContent || '';
-    const replacement = args.ReplacementContent || '';
+  if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
+    const target = args.TargetContent || args.targetContent || args.target_content || '';
+    const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
     if (target || replacement) {
       diffLines.push(`--- a/${fileName}`);
       diffLines.push(`+++ b/${fileName}`);
       diffLines.push(`@@ edit @@`);
       if (target) {
-        target.split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+        String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
       }
       if (replacement) {
-        replacement.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+        String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
       }
     }
-  } else if (name.includes('multi_replace_file_content')) {
-    const chunks = args.ReplacementChunks || args.chunks || [];
+  } else if (normName.includes('multireplacefilecontent')) {
+    const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
     if (Array.isArray(chunks) && chunks.length > 0) {
       diffLines.push(`--- a/${fileName}`);
       diffLines.push(`+++ b/${fileName}`);
       chunks.forEach((chunk: any, idx: number) => {
         diffLines.push(`@@ chunk ${idx + 1} @@`);
-        const target = chunk.TargetContent || '';
-        const replacement = chunk.ReplacementContent || '';
+        const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
+        const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
         if (target) {
-          target.split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+          String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
         }
         if (replacement) {
-          replacement.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+          String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
         }
       });
     }
-  } else if (name.includes('write_to_file')) {
-    const code = args.CodeContent || args.code || '';
+  } else if (normName.includes('writetofile') || normName.includes('writefile')) {
+    const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
     if (code) {
       diffLines.push(`--- /dev/null`);
       diffLines.push(`+++ b/${fileName}`);
       diffLines.push(`@@ new file @@`);
-      code.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+      String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
     }
   }
 
@@ -1129,6 +1247,12 @@ window.addEventListener('message', (event) => {
       renderAll();
       break;
 
+    case 'setSlashCommands':
+      if (data.commands && Array.isArray(data.commands)) {
+        SLASH_COMMANDS = data.commands;
+      }
+      break;
+
     case 'slashResult':
       if (data.message) {
         messages.push({
@@ -1150,6 +1274,7 @@ window.addEventListener('message', (event) => {
 });
 
 vscode.postMessage({ command: 'getActiveFile' });
+vscode.postMessage({ command: 'getSlashCommands' });
 
 if (messages.length > 0) {
   renderAll();

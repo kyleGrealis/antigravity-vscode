@@ -48,6 +48,45 @@ export class DiffController {
     await vscode.commands.executeCommand('setContext', 'antigravity-vscode.viewingProposedDiff', true);
   }
 
+  public async showDiffFromToolCall(targetFilePath: string, toolName: string, toolArgs: any): Promise<void> {
+    const normName = (toolName || '').toLowerCase().replace(/[-_]/g, '');
+    const resolvedTargetPath = this.resolvePath(targetFilePath);
+
+    let originalContent = '';
+    if (fs.existsSync(resolvedTargetPath)) {
+      originalContent = fs.readFileSync(resolvedTargetPath, 'utf-8');
+    }
+
+    let proposedContent = originalContent;
+
+    if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
+      const target = toolArgs?.TargetContent || toolArgs?.targetContent || toolArgs?.target_content || '';
+      const replacement = toolArgs?.ReplacementContent || toolArgs?.replacementContent || toolArgs?.replacement_content || '';
+      if (target && originalContent.includes(target)) {
+        proposedContent = originalContent.replace(target, replacement);
+      } else if (replacement) {
+        proposedContent = replacement;
+      }
+    } else if (normName.includes('multireplacefilecontent')) {
+      const chunks = toolArgs?.ReplacementChunks || toolArgs?.replacementChunks || toolArgs?.chunks || [];
+      if (Array.isArray(chunks)) {
+        let temp = originalContent;
+        for (const chunk of chunks) {
+          const t = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
+          const r = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
+          if (t && temp.includes(t)) {
+            temp = temp.replace(t, r);
+          }
+        }
+        proposedContent = temp;
+      }
+    } else if (normName.includes('writetofile') || normName.includes('writefile')) {
+      proposedContent = toolArgs?.CodeContent || toolArgs?.codeContent || toolArgs?.code || '';
+    }
+
+    await this.showDiff(targetFilePath, proposedContent);
+  }
+
   public async acceptDiff(targetFilePath?: string): Promise<void> {
     const key = targetFilePath ? this.resolvePath(targetFilePath) : Array.from(this.activeDiffs.keys()).pop();
     if (!key) return;
@@ -60,6 +99,12 @@ export class DiffController {
         fs.mkdirSync(dir, { recursive: true });
       }
       fs.writeFileSync(diffInfo.targetPath, proposedContent, 'utf-8');
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(diffInfo.targetPath));
+        await vscode.window.showTextDocument(doc, { preview: false });
+      } catch {
+        // ignore open document error if editor is unavailable
+      }
       this.cleanup(key);
     }
   }

@@ -30,6 +30,25 @@ html, body {
   overflow: hidden;
 }
 
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
+}
+
 .app-container {
   display: flex;
   flex-direction: column;
@@ -94,18 +113,8 @@ html, body {
 /* Message Log */
 .message-log {
   flex: 1;
-  overflow-y: scroll;
-  scrollbar-gutter: stable;
+  overflow-y: auto;
   padding: 0;
-}
-
-.message-log::-webkit-scrollbar {
-  width: 6px;
-}
-
-.message-log::-webkit-scrollbar-thumb {
-  background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.15));
-  border-radius: 3px;
 }
 
 .msg {
@@ -202,7 +211,6 @@ html, body {
   white-space: pre-wrap;
   max-height: 250px;
   overflow-y: auto;
-  scrollbar-gutter: stable;
 }
 
 .thinking-body.open {
@@ -219,27 +227,10 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 220px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
   padding: 4px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  transition: max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.tool-section:has(.tool-body.open) {
-  max-height: 600px;
-}
-
-.tool-section::-webkit-scrollbar {
-  width: 6px;
-}
-
-.tool-section::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
 }
 
 .tool-accordion {
@@ -365,13 +356,34 @@ html, body {
   margin-top: 4px;
 }
 
+.tool-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
 .tool-block-title {
   font-weight: 600;
   font-size: 10px;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 3px;
+  margin-bottom: 0;
+}
+
+.open-diff-btn {
+  background: none;
+  border: none;
+  color: var(--text-link);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.open-diff-btn:hover {
+  text-decoration: underline;
 }
 
 .tool-json-pre {
@@ -381,11 +393,10 @@ html, body {
   border: 1px solid var(--border);
   overflow-x: auto;
   overflow-y: auto;
-  scrollbar-gutter: stable;
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 11px;
-  max-height: 220px;
+  max-height: 400px;
   margin: 0;
   color: var(--text-primary);
 }
@@ -542,25 +553,67 @@ html, body {
 .msg-body code {
   font-family: var(--font-mono);
   font-size: 11px;
-  background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.06));
-  padding: 1px 4px;
-  border-radius: 2px;
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.3));
+  color: var(--vscode-textPreformat-foreground, #ce9178);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
+.msg-body code:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .msg-body pre {
-  background: var(--vscode-textCodeBlock-background, var(--bg-surface));
+  position: relative;
+  background: var(--vscode-textCodeBlock-background, #181818);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 8px;
+  padding: 8px 10px;
   overflow-x: auto;
   margin: 6px 0;
 }
 
 .msg-body pre code {
   background: none;
+  border: none;
   padding: 0;
   font-size: 11px;
   line-height: 1.4;
+  color: var(--vscode-textPreformat-foreground, #ce9178);
+  cursor: text;
+}
+
+/* Copy Code Button */
+.copy-code-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.1));
+  color: var(--vscode-button-secondaryForeground, var(--text-primary));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+  z-index: 5;
+}
+
+.copy-code-btn:hover {
+  opacity: 1;
+  background: var(--vscode-button-hoverBackground, rgba(255, 255, 255, 0.2));
+}
+
+.copy-code-btn.copied {
+  color: #4ec9b0;
+  border-color: #4ec9b0;
+  opacity: 1;
+  background: rgba(78, 201, 176, 0.15);
 }
 
 .msg-body ul,
@@ -654,6 +707,22 @@ html, body {
   color: var(--text-link);
   font-weight: 600;
   flex-shrink: 0;
+}
+
+.slash-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(49, 134, 255, 0.15);
+  color: var(--text-link);
+  font-weight: 600;
+  flex-shrink: 0;
+  text-transform: lowercase;
+}
+
+.slash-item.active .slash-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--text-active);
 }
 
 .slash-desc {

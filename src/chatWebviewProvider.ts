@@ -5,6 +5,7 @@ import * as os from 'os';
 import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
+import { loadSkills } from './skillManager';
 
 function cleanToolArgs(rawArgs: any): Record<string, any> | undefined {
   if (!rawArgs) return undefined;
@@ -88,6 +89,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
     this.setupWebviewMessageListeners(webviewView.webview);
+    this.sendSlashCommands(webviewView.webview);
   }
 
   public createOrShowPanel(): vscode.WebviewPanel {
@@ -110,12 +112,84 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this.currentPanel = panel;
     panel.webview.html = this.getHtmlForWebview(panel.webview);
     this.setupWebviewMessageListeners(panel.webview);
+    this.sendSlashCommands(panel.webview);
 
     panel.onDidDispose(() => {
       this.currentPanel = undefined;
     });
 
     return panel;
+  }
+
+  public sendSlashCommands(targetWebview?: vscode.Webview) {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspacePath = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
+    const skills = loadSkills(workspacePath);
+
+    const baseCommands = [
+      { name: 'new', description: 'start a new conversation' },
+      { name: 'clear', description: 'clear chat history' },
+      {
+        name: 'model',
+        description: 'set the model',
+        hasArg: true,
+        argHint: '<model-name>',
+        options: [
+          { value: 'flash-lite', label: 'Gemini 2.5 Flash Lite' },
+          { value: 'flash', label: 'Gemini 2.5 Flash' },
+          { value: 'pro', label: 'Gemini 2.5 Pro' },
+          { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+          { value: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
+        ]
+      },
+      {
+        name: 'effort',
+        description: 'set reasoning effort',
+        hasArg: true,
+        argHint: 'low | medium | high',
+        options: [
+          { value: 'low', label: 'Low reasoning effort' },
+          { value: 'medium', label: 'Medium reasoning effort' },
+          { value: 'high', label: 'High reasoning effort' },
+        ]
+      },
+      { name: 'plan', description: 'request step-by-step planning before execution' },
+      { name: 'goal', description: 'run a long-running task with extra thoroughness' },
+      { name: 'schedule', description: 'set a timer or recurring cron schedule' },
+      { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
+      { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
+      { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'terminal', description: 'open agy in terminal mode' },
+      { name: 'settings', description: 'open extension settings' },
+      { name: 'help', description: 'show available commands' },
+    ];
+
+    const skillOptions = skills.map(s => ({
+      value: s.name,
+      label: s.description,
+    }));
+
+    const skillCommand = {
+      name: 'skill',
+      description: 'invoke an available skill',
+      hasArg: true,
+      argHint: '<skill-name>',
+      options: skillOptions,
+    };
+
+    const directSkillCommands = skills.map(s => ({
+      name: s.name,
+      description: s.description,
+      isSkill: true,
+      hasArg: false,
+    }));
+
+    const allCommands = [...baseCommands, skillCommand, ...directSkillCommands];
+
+    const webviews = targetWebview ? [targetWebview] : this.getWebviews();
+    webviews.forEach(wv => {
+      wv.postMessage({ type: 'setSlashCommands', commands: allCommands });
+    });
   }
 
   private setupWebviewMessageListeners(webview: vscode.Webview) {
@@ -149,12 +223,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           this.handleOpenFile(message.filePath);
           break;
 
+        case 'getSlashCommands':
+          this.sendSlashCommands(webview);
+          break;
+
         case 'slashCommand':
           this.handleSlashCommand(message.name, message.arg, webview);
           break;
 
         case 'searchFiles':
           this.handleSearchFiles(message.query, webview);
+          break;
+
+        case 'copyToClipboard':
+          if (message.text) {
+            vscode.env.clipboard.writeText(message.text);
+          }
+          break;
+
+        case 'openDiffView':
+          if (message.targetFile) {
+            this.diffController.showDiffFromToolCall(message.targetFile, message.toolName, message.toolArgs);
+          }
           break;
       }
     });
@@ -234,6 +324,20 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleSlashCommand(name: string, arg: string | undefined, webview: vscode.Webview) {
+    const uiCommands = ['new', 'clear', 'model', 'effort', 'terminal', 'settings', 'help'];
+    if (!uiCommands.includes(name)) {
+      let promptText = '';
+      if (name === 'skill') {
+        promptText = arg ? `Use the ${arg} skill.` : '/skill';
+      } else if (arg) {
+        promptText = `/${name} ${arg}`;
+      } else {
+        promptText = `/${name}`;
+      }
+      this.onUserPrompt(promptText, []);
+      return;
+    }
+
     const config = vscode.workspace.getConfiguration('antigravity');
 
     switch (name) {
@@ -428,17 +532,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
               result: toolResult,
             })
           );
-
-          if (
-            (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
-            toolArgs
-          ) {
-            const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
-            const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
-            if (targetFile && content) {
-              this.diffController.showDiff(targetFile, content);
-            }
-          }
         });
       } else if (isToolCall) {
         let toolName = toolNameRaw || (isKnownToolType ? stepType : '');
@@ -469,17 +562,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
               result: toolResult,
             })
           );
-
-          if (
-            (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
-            toolArgs
-          ) {
-            const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
-            const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
-            if (targetFile && content) {
-              this.diffController.showDiff(targetFile, content);
-            }
-          }
         }
       }
 
