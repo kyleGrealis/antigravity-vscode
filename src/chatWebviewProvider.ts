@@ -152,6 +152,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'slashCommand':
           this.handleSlashCommand(message.name, message.arg, webview);
           break;
+
+        case 'searchFiles':
+          this.handleSearchFiles(message.query, webview);
+          break;
       }
     });
   }
@@ -437,7 +441,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           }
         });
       } else if (isToolCall) {
-        let toolName = toolNameRaw || stepType || 'Tool Execution';
+        let toolName = toolNameRaw || (isKnownToolType ? stepType : '');
         toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
 
         let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args;
@@ -447,28 +451,34 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
 
         let toolResult = toolInfo.output || step.content || step.output || step.result || step.text || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
-        const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
-        const toolId = step.tool_call_id || step.call_id || step.id || (step.step_index !== undefined ? `step_${step.step_index}` : toolName);
 
-        webviews.forEach((wv) =>
-          wv.postMessage({
-            type: 'toolCall',
-            id: toolId,
-            name: toolName,
-            args: toolArgs,
-            status: toolStatus,
-            result: toolResult,
-          })
-        );
+        const isGenericName = !toolName || ['tool', 'tool_call', 'tool_use', 'tool execution', 'tool_execution'].includes(toolName);
 
-        if (
-          (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
-          toolArgs
-        ) {
-          const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
-          const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
-          if (targetFile && content) {
-            this.diffController.showDiff(targetFile, content);
+        if (!isGenericName || toolArgs || toolResult) {
+          if (isGenericName) toolName = 'Tool Execution';
+          const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
+          const toolId = step.tool_call_id || step.call_id || step.id || (step.step_index !== undefined ? `step_${step.step_index}` : toolName);
+
+          webviews.forEach((wv) =>
+            wv.postMessage({
+              type: 'toolCall',
+              id: toolId,
+              name: toolName,
+              args: toolArgs,
+              status: toolStatus,
+              result: toolResult,
+            })
+          );
+
+          if (
+            (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') &&
+            toolArgs
+          ) {
+            const targetFile = toolArgs.TargetFile || toolArgs.targetFile;
+            const content = toolArgs.ReplacementContent || toolArgs.CodeContent || '';
+            if (targetFile && content) {
+              this.diffController.showDiff(targetFile, content);
+            }
           }
         }
       }
@@ -534,6 +544,31 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  private async handleSearchFiles(query: string, webview: vscode.Webview) {
+    try {
+      const searchPattern = query ? `**/*${query}*` : '**/*';
+      const excludePattern = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/.antigravity/**}';
+      const uris = await vscode.workspace.findFiles(searchPattern, excludePattern, 50);
+      const files = uris.map((u) => vscode.workspace.asRelativePath(u));
+
+      files.sort((a, b) => {
+        const q = (query || '').toLowerCase();
+        const aBase = path.basename(a).toLowerCase();
+        const bBase = path.basename(b).toLowerCase();
+        const aStarts = aBase.startsWith(q);
+        const bStarts = bBase.startsWith(q);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+        return a.localeCompare(b);
+      });
+
+      webview.postMessage({ type: 'fileSearchResults', query, files });
+    } catch (err) {
+      console.error('Failed to search files for @ completion:', err);
+      webview.postMessage({ type: 'fileSearchResults', query, files: [] });
+    }
+  }
+
   private getWebviews(): vscode.Webview[] {
     const list: vscode.Webview[] = [];
     if (this.view) list.push(this.view.webview);
@@ -572,7 +607,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 			<div id="image-attachment-bar" class="image-attachment-bar" style="display: none;"></div>
 			<div class="input-row">
 				<div id="slash-menu" class="slash-menu" style="display: none;"></div>
-				<textarea id="prompt-input" rows="1" placeholder="What do you want to do? (paste/drop images supported)"></textarea>
+				<div id="at-menu" class="at-menu" style="display: none;"></div>
+				<textarea id="prompt-input" rows="1" placeholder="What do you want to do? Use @ to mention files..."></textarea>
 			</div>
 			<div class="input-footer">
 				<span class="input-hint">enter to send, shift+enter for newline</span>

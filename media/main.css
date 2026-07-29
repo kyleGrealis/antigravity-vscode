@@ -1,11 +1,12 @@
 :root {
   --bg-primary: var(--vscode-sideBar-background, #1e1e1e);
   --bg-surface: var(--vscode-editor-background, #252526);
-  --bg-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
-  --bg-active: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.08));
+  --bg-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+  --bg-active: var(--vscode-quickInputList-focusBackground, var(--vscode-list-activeSelectionBackground, var(--vscode-list-focusBackground, #04395e)));
   --text-primary: var(--vscode-editor-foreground, #cccccc);
   --text-secondary: var(--vscode-descriptionForeground, #858585);
   --text-link: var(--vscode-textLink-foreground, #3794ff);
+  --text-active: var(--vscode-quickInputList-focusForeground, var(--vscode-list-activeSelectionForeground, #ffffff));
   --border: var(--vscode-panel-border, var(--vscode-sideBarSectionHeader-border, rgba(255, 255, 255, 0.1)));
   --focus-border: var(--vscode-focusBorder, #007fd4);
   --font-mono: var(--vscode-editor-font-family, var(--vscode-font-family, 'Consolas', 'Courier New', monospace));
@@ -93,7 +94,8 @@ html, body {
 /* Message Log */
 .message-log {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
   padding: 0;
 }
 
@@ -109,6 +111,26 @@ html, body {
 .msg {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.msg.msg-user,
+.msg:has(.msg-role.user) {
+  margin: 12px 10px 8px 10px;
+  padding: 10px 14px;
+  background: var(--vscode-input-background, rgba(255, 255, 255, 0.07));
+  border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.msg.msg-user .msg-role,
+.msg:has(.msg-role.user) .msg-role.user {
+  display: none;
+}
+
+.msg.msg-user .msg-body,
+.msg:has(.msg-role.user) .msg-body {
+  white-space: pre-wrap;
 }
 
 .msg:last-child {
@@ -180,6 +202,7 @@ html, body {
   white-space: pre-wrap;
   max-height: 250px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .thinking-body.open {
@@ -191,30 +214,54 @@ html, body {
   100% { transform: rotate(360deg); }
 }
 
-/* Tool Execution Items & Accordions */
 .tool-section {
   margin: 6px 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tool-section:has(.tool-body.open) {
+  max-height: 600px;
+}
+
+.tool-section::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tool-section::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
 }
 
 .tool-accordion {
-  background: var(--bg-hover);
+  background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 11px;
   overflow: hidden;
+  min-height: 26px;
+  box-sizing: border-box;
 }
 
 .tool-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 4px 8px;
   cursor: pointer;
   user-select: none;
   background: transparent;
+  min-height: 24px;
+  box-sizing: border-box;
   transition: background 0.15s ease;
 }
 
@@ -290,17 +337,27 @@ html, body {
 }
 
 .tool-body {
-  display: none;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease-out, padding 0.2s ease-out;
+  padding: 0 10px;
+  border-top: 1px solid transparent;
   background: var(--bg-surface);
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-primary);
+  overflow: hidden;
 }
 
 .tool-body.open {
-  display: block;
+  grid-template-rows: 1fr;
+  padding: 8px 10px;
+  border-top-color: var(--border);
+}
+
+.tool-body-inner {
+  overflow: hidden;
+  min-height: 0;
 }
 
 .tool-args-block,
@@ -323,6 +380,8 @@ html, body {
   border-radius: 4px;
   border: 1px solid var(--border);
   overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 11px;
@@ -574,8 +633,21 @@ html, body {
 }
 
 .slash-item:hover,
-.slash-item.active {
+.at-item:hover {
   background: var(--bg-hover);
+}
+
+.slash-item.active,
+.at-item.active {
+  background: var(--bg-active);
+  color: var(--text-active);
+}
+
+.slash-item.active .slash-name,
+.slash-item.active .slash-desc,
+.at-item.active .at-icon,
+.at-item.active .at-path {
+  color: var(--text-active);
 }
 
 .slash-name {
@@ -587,6 +659,47 @@ html, body {
 .slash-desc {
   color: var(--text-secondary);
   font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* @ File Mention Menu */
+.at-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 11;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.at-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.at-icon {
+  color: var(--text-link);
+  font-size: 11px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+.at-path {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

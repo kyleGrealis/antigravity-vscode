@@ -29,18 +29,54 @@ interface Message {
   isStreaming?: boolean;
 }
 
+interface SlashOption {
+  value: string;
+  label: string;
+}
+
 interface SlashCommand {
   name: string;
   description: string;
   hasArg?: boolean;
   argHint?: string;
+  options?: SlashOption[];
+}
+
+interface SlashDisplayItem {
+  name: string;
+  displayName: string;
+  description: string;
+  hasArg?: boolean;
+  insertValue?: string;
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', description: 'start a new conversation' },
   { name: 'clear', description: 'clear chat history' },
-  { name: 'model', description: 'set the model', hasArg: true, argHint: '<model-name>' },
-  { name: 'effort', description: 'set reasoning effort', hasArg: true, argHint: 'low | medium | high' },
+  { 
+    name: 'model', 
+    description: 'set the model', 
+    hasArg: true, 
+    argHint: '<model-name>',
+    options: [
+      { value: 'flash-lite', label: 'Gemini 2.5 Flash Lite' },
+      { value: 'flash', label: 'Gemini 2.5 Flash' },
+      { value: 'pro', label: 'Gemini 2.5 Pro' },
+      { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+      { value: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
+    ]
+  },
+  { 
+    name: 'effort', 
+    description: 'set reasoning effort', 
+    hasArg: true, 
+    argHint: 'low | medium | high',
+    options: [
+      { value: 'low', label: 'Low reasoning effort' },
+      { value: 'medium', label: 'Medium reasoning effort' },
+      { value: 'high', label: 'High reasoning effort' },
+    ]
+  },
   { name: 'terminal', description: 'open agy in terminal mode' },
   { name: 'settings', description: 'open extension settings' },
   { name: 'help', description: 'show available commands' },
@@ -50,7 +86,7 @@ const savedState = vscode.getState() as { messages?: Message[] } | undefined;
 let messages: Message[] = savedState?.messages || [];
 let currentStreamingMessage: Message | null = null;
 let slashMenuIndex = 0;
-let slashFiltered: SlashCommand[] = [];
+let slashFiltered: SlashDisplayItem[] = [];
 
 let attachedImages: string[] = [];
 
@@ -65,6 +101,11 @@ const statusEl = document.getElementById('status-text') as HTMLElement;
 const fileChip = document.getElementById('active-file-context') as HTMLElement;
 const contextBar = document.getElementById('context-bar') as HTMLElement;
 const slashMenu = document.getElementById('slash-menu') as HTMLElement;
+const atMenu = document.getElementById('at-menu') as HTMLElement;
+
+let atMenuIndex = 0;
+let atFilteredFiles: string[] = [];
+let atDebounceTimer: any = null;
 
 attachImgBtn?.addEventListener('click', () => {
   vscode.postMessage({ command: 'selectImage' });
@@ -118,19 +159,45 @@ input?.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   updateSlashMenu();
+  updateAtMenu();
 });
 
 input?.addEventListener('keydown', (e) => {
+  if (isAtMenuVisible()) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      atMenuIndex = (atMenuIndex + 1) % atFilteredFiles.length;
+      renderAtMenu();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      atMenuIndex = (atMenuIndex - 1 + atFilteredFiles.length) % atFilteredFiles.length;
+      renderAtMenu();
+      return;
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault();
+      acceptAtItem();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideAtMenu();
+      return;
+    }
+  }
+
   if (isSlashMenuVisible()) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      slashMenuIndex = Math.min(slashMenuIndex + 1, slashFiltered.length - 1);
+      slashMenuIndex = (slashMenuIndex + 1) % slashFiltered.length;
       renderSlashMenu();
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      slashMenuIndex = Math.max(slashMenuIndex - 1, 0);
+      slashMenuIndex = (slashMenuIndex - 1 + slashFiltered.length) % slashFiltered.length;
       renderSlashMenu();
       return;
     }
@@ -196,24 +263,58 @@ function getSlashMatch(): { prefix: string; query: string } | null {
 }
 
 function isSlashMenuVisible(): boolean {
-  return slashMenu?.style.display !== 'none';
+  return slashMenu?.style.display !== 'none' && slashFiltered.length > 0;
 }
 
 function updateSlashMenu() {
-  const match = getSlashMatch();
-  if (!match) {
+  const val = input.value;
+  if (!val.startsWith('/')) {
     hideSlashMenu();
     return;
   }
-  const q = match.query.toLowerCase();
-  slashFiltered = SLASH_COMMANDS.filter(c => c.name.startsWith(q));
-  if (slashFiltered.length === 0) {
+
+  // Check if command + argument (e.g. /model ... or /effort ...)
+  const spaceIndex = val.indexOf(' ');
+  if (spaceIndex !== -1) {
+    const cmdName = val.slice(1, spaceIndex).toLowerCase();
+    const argQuery = val.slice(spaceIndex + 1).toLowerCase();
+    const cmd = SLASH_COMMANDS.find(c => c.name === cmdName);
+    if (cmd && cmd.options) {
+      const matchingOpts = cmd.options.filter(o => o.value.toLowerCase().includes(argQuery) || o.label.toLowerCase().includes(argQuery));
+      if (matchingOpts.length > 0) {
+        slashFiltered = matchingOpts.map(o => ({
+          name: cmd.name,
+          displayName: `/${cmd.name} ${o.value}`,
+          description: o.label,
+          insertValue: `/${cmd.name} ${o.value}`,
+        }));
+        slashMenuIndex = 0;
+        renderSlashMenu();
+        if (slashMenu) slashMenu.style.display = 'block';
+        return;
+      }
+    }
     hideSlashMenu();
     return;
   }
+
+  // Matching top-level command (e.g. / or /mod)
+  const q = val.slice(1).toLowerCase();
+  const matchedCmds = SLASH_COMMANDS.filter(c => c.name.startsWith(q));
+  if (matchedCmds.length === 0) {
+    hideSlashMenu();
+    return;
+  }
+
+  slashFiltered = matchedCmds.map(c => ({
+    name: c.name,
+    displayName: `/${c.name}`,
+    description: c.description + (c.argHint ? ` ${c.argHint}` : ''),
+    hasArg: c.hasArg,
+  }));
   slashMenuIndex = 0;
   renderSlashMenu();
-  slashMenu.style.display = 'block';
+  if (slashMenu) slashMenu.style.display = 'block';
 }
 
 function renderSlashMenu() {
@@ -222,7 +323,14 @@ function renderSlashMenu() {
   slashFiltered.forEach((cmd, i) => {
     const row = document.createElement('div');
     row.className = 'slash-item' + (i === slashMenuIndex ? ' active' : '');
-    row.innerHTML = `<span class="slash-name">/${esc(cmd.name)}</span><span class="slash-desc">${esc(cmd.description)}</span>`;
+    row.innerHTML = `<span class="slash-name">${esc(cmd.displayName)}</span><span class="slash-desc">${esc(cmd.description)}</span>`;
+    row.addEventListener('mouseenter', () => {
+      slashMenuIndex = i;
+      const items = slashMenu.querySelectorAll('.slash-item');
+      items.forEach((el, idx) => {
+        el.classList.toggle('active', idx === slashMenuIndex);
+      });
+    });
     row.addEventListener('mousedown', (e) => {
       e.preventDefault();
       slashMenuIndex = i;
@@ -230,25 +338,125 @@ function renderSlashMenu() {
     });
     slashMenu.appendChild(row);
   });
+
+  const activeEl = slashMenu.querySelector('.slash-item.active') as HTMLElement;
+  if (activeEl) {
+    activeEl.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function acceptSlashItem() {
-  const cmd = slashFiltered[slashMenuIndex];
-  if (!cmd) return;
-  if (cmd.hasArg) {
-    input.value = `/${cmd.name} `;
+  const item = slashFiltered[slashMenuIndex];
+  if (!item) return;
+  if (item.insertValue) {
+    input.value = '';
     hideSlashMenu();
+    const match = item.insertValue.match(/^\/(\S+)\s*(.*)?$/);
+    if (match) {
+      executeSlashCommand(match[1], match[2] || undefined);
+    }
+  } else if (item.hasArg) {
+    input.value = `/${item.name} `;
+    hideSlashMenu();
+    updateSlashMenu();
     input.focus();
   } else {
     input.value = '';
     hideSlashMenu();
-    executeSlashCommand(cmd.name);
+    executeSlashCommand(item.name);
   }
 }
 
 function hideSlashMenu() {
   if (slashMenu) slashMenu.style.display = 'none';
   slashFiltered = [];
+}
+
+function getAtMatch(): { start: number; end: number; query: string } | null {
+  if (!input) return null;
+  const cursor = input.selectionStart;
+  const textBeforeCursor = input.value.slice(0, cursor);
+  const match = textBeforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!match) return null;
+  const atIndex = textBeforeCursor.lastIndexOf('@');
+  if (atIndex < 0) return null;
+  return {
+    start: atIndex,
+    end: cursor,
+    query: match[1],
+  };
+}
+
+function isAtMenuVisible(): boolean {
+  return atMenu?.style.display !== 'none' && atFilteredFiles.length > 0;
+}
+
+function updateAtMenu() {
+  const match = getAtMatch();
+  if (!match) {
+    hideAtMenu();
+    return;
+  }
+  if (atDebounceTimer) clearTimeout(atDebounceTimer);
+  atDebounceTimer = setTimeout(() => {
+    vscode.postMessage({ command: 'searchFiles', query: match.query });
+  }, 100);
+}
+
+function hideAtMenu() {
+  if (atMenu) atMenu.style.display = 'none';
+  atFilteredFiles = [];
+}
+
+function renderAtMenu() {
+  if (!atMenu) return;
+  atMenu.innerHTML = '';
+  if (atFilteredFiles.length === 0) {
+    atMenu.style.display = 'none';
+    return;
+  }
+
+  atFilteredFiles.forEach((file, i) => {
+    const row = document.createElement('div');
+    row.className = 'at-item' + (i === atMenuIndex ? ' active' : '');
+    row.innerHTML = `<span class="at-icon">@</span><span class="at-path">${esc(file)}</span>`;
+    row.addEventListener('mouseenter', () => {
+      atMenuIndex = i;
+      const items = atMenu.querySelectorAll('.at-item');
+      items.forEach((el, idx) => {
+        el.classList.toggle('active', idx === atMenuIndex);
+      });
+    });
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      atMenuIndex = i;
+      acceptAtItem();
+    });
+    atMenu.appendChild(row);
+  });
+  atMenu.style.display = 'block';
+
+  const activeEl = atMenu.querySelector('.at-item.active') as HTMLElement;
+  if (activeEl) {
+    activeEl.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function acceptAtItem() {
+  const file = atFilteredFiles[atMenuIndex];
+  if (!file) return;
+  const match = getAtMatch();
+  if (!match) return;
+
+  const before = input.value.slice(0, match.start);
+  const after = input.value.slice(match.end);
+  const replacement = `@${file} `;
+  input.value = before + replacement + after;
+  const newCursorPos = before.length + replacement.length;
+  input.setSelectionRange(newCursorPos, newCursorPos);
+
+  hideAtMenu();
+  input.focus();
 }
 
 function executeSlashCommand(name: string, arg?: string) {
@@ -313,7 +521,7 @@ function sendPrompt() {
   };
   messages.push(currentStreamingMessage);
 
-  renderAll();
+  renderAll(true);
   setBusy(true);
 
   vscode.postMessage({
@@ -421,13 +629,14 @@ function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   };
 }
 
-function renderAll() {
+function renderAll(autoScrollForce: boolean = false) {
   if (!log) return;
+  const wasAtBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) <= 80;
   log.innerHTML = '';
 
   for (const msg of messages) {
     const el = document.createElement('div');
-    el.className = 'msg';
+    el.className = `msg msg-${msg.role}`;
 
     const role = document.createElement('div');
     role.className = `msg-role ${msg.role}`;
@@ -487,7 +696,27 @@ function renderAll() {
         const body = document.createElement('div');
         body.className = `tool-body${tc.expanded ? ' open' : ''}`;
 
+        const bodyInner = document.createElement('div');
+        bodyInner.className = 'tool-body-inner';
+
         let hasContent = false;
+
+        const diffStr = buildDiffFromToolArgs(tc.name, tc.args);
+        if (diffStr) {
+          hasContent = true;
+          const diffBlock = document.createElement('div');
+          diffBlock.className = 'tool-diff-block';
+          const title = document.createElement('div');
+          title.className = 'tool-block-title';
+          title.textContent = 'Changes (Diff)';
+          diffBlock.appendChild(title);
+
+          const pre = document.createElement('pre');
+          pre.className = 'tool-json-pre';
+          pre.innerHTML = renderDiffOrTextHtml(diffStr);
+          diffBlock.appendChild(pre);
+          bodyInner.appendChild(diffBlock);
+        }
 
         if (tc.args && (typeof tc.args === 'string' || Object.keys(tc.args).length > 0)) {
           hasContent = true;
@@ -511,7 +740,7 @@ function renderAll() {
           }
           pre.textContent = formattedArgs;
           argsBlock.appendChild(pre);
-          body.appendChild(argsBlock);
+          bodyInner.appendChild(argsBlock);
         }
 
         if (tc.result !== undefined && tc.result !== null && String(tc.result).trim() !== '') {
@@ -540,7 +769,7 @@ function renderAll() {
             pre.textContent = String(formattedResult);
           }
           resultBlock.appendChild(pre);
-          body.appendChild(resultBlock);
+          bodyInner.appendChild(resultBlock);
         }
 
         if (!hasContent) {
@@ -550,8 +779,10 @@ function renderAll() {
           emptyInfo.style.fontStyle = 'italic';
           emptyInfo.style.fontSize = '11px';
           emptyInfo.textContent = 'No detailed arguments or output recorded.';
-          body.appendChild(emptyInfo);
+          bodyInner.appendChild(emptyInfo);
         }
+
+        body.appendChild(bodyInner);
 
         header.addEventListener('click', (e) => {
           const target = e.target as HTMLElement;
@@ -566,8 +797,12 @@ function renderAll() {
         accordion.appendChild(body);
         toolSection.appendChild(accordion);
       }
-
       el.appendChild(toolSection);
+      requestAnimationFrame(() => {
+        if (autoScrollForce || wasAtBottom) {
+          toolSection.scrollTop = toolSection.scrollHeight;
+        }
+      });
     }
 
     const body = document.createElement('div');
@@ -595,7 +830,11 @@ function renderAll() {
     log.appendChild(el);
   }
 
-  log.scrollTop = log.scrollHeight;
+  requestAnimationFrame(() => {
+    if (autoScrollForce || wasAtBottom) {
+      log.scrollTop = log.scrollHeight;
+    }
+  });
 
   const toSave = messages.filter(m => !m.isStreaming);
   vscode.setState({ messages: toSave });
@@ -655,6 +894,64 @@ function isDiffText(text: string): boolean {
   return hasHdr || (hasAdd && hasDel) || (hasAdd && lines.length <= 15) || (hasDel && lines.length <= 15);
 }
 
+function buildDiffFromToolArgs(toolName: string, rawArgs: any): string | null {
+  if (!rawArgs) return null;
+  let args = rawArgs;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch {}
+  }
+  if (typeof args !== 'object' || !args) return null;
+
+  const name = toolName.toLowerCase();
+  const file = args.TargetFile || args.targetFile || args.path || args.file || '';
+  const fileName = file ? file.split(/[\/\\]/).pop() : 'file';
+
+  let diffLines: string[] = [];
+
+  if (name.includes('replace_file_content') && !name.includes('multi')) {
+    const target = args.TargetContent || '';
+    const replacement = args.ReplacementContent || '';
+    if (target || replacement) {
+      diffLines.push(`--- a/${fileName}`);
+      diffLines.push(`+++ b/${fileName}`);
+      diffLines.push(`@@ edit @@`);
+      if (target) {
+        target.split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+      }
+      if (replacement) {
+        replacement.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+      }
+    }
+  } else if (name.includes('multi_replace_file_content')) {
+    const chunks = args.ReplacementChunks || args.chunks || [];
+    if (Array.isArray(chunks) && chunks.length > 0) {
+      diffLines.push(`--- a/${fileName}`);
+      diffLines.push(`+++ b/${fileName}`);
+      chunks.forEach((chunk: any, idx: number) => {
+        diffLines.push(`@@ chunk ${idx + 1} @@`);
+        const target = chunk.TargetContent || '';
+        const replacement = chunk.ReplacementContent || '';
+        if (target) {
+          target.split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+        }
+        if (replacement) {
+          replacement.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+        }
+      });
+    }
+  } else if (name.includes('write_to_file')) {
+    const code = args.CodeContent || args.code || '';
+    if (code) {
+      diffLines.push(`--- /dev/null`);
+      diffLines.push(`+++ b/${fileName}`);
+      diffLines.push(`@@ new file @@`);
+      code.split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+    }
+  }
+
+  return diffLines.length > 0 ? diffLines.join('\n') : null;
+}
+
 function renderDiffOrTextHtml(text: string): string {
   if (!isDiffText(text)) {
     return esc(text);
@@ -708,11 +1005,18 @@ window.addEventListener('message', (event) => {
       if (currentStreamingMessage) {
         if (!currentStreamingMessage.toolCalls) currentStreamingMessage.toolCalls = [];
         
+        const rawName = (data.name || '').toLowerCase();
+        const isGenericName = !rawName || ['tool', 'tool_call', 'tool_use', 'tool execution', 'tool_execution'].includes(rawName);
+        
+        if (isGenericName && !data.args && !data.result && !data.id) {
+          break;
+        }
+
         let existing = data.id !== undefined && data.id !== null
           ? currentStreamingMessage.toolCalls.find(tc => tc.id === data.id)
           : null;
 
-        if (!existing && data.name) {
+        if (!existing && data.name && !isGenericName) {
           existing = currentStreamingMessage.toolCalls.find(
             tc => tc.name.toLowerCase() === data.name.toLowerCase() && (tc.status === 'running' || !tc.result || !tc.args)
           ) || null;
@@ -720,7 +1024,7 @@ window.addEventListener('message', (event) => {
 
         if (existing) {
           if (data.id) existing.id = data.id;
-          if (data.name) existing.name = data.name;
+          if (data.name && !isGenericName) existing.name = data.name;
           if (data.args && (typeof data.args === 'string' || (typeof data.args === 'object' && Object.keys(data.args).length > 0))) {
             if (typeof existing.args === 'object' && typeof data.args === 'object') {
               existing.args = { ...existing.args, ...data.args };
@@ -735,7 +1039,7 @@ window.addEventListener('message', (event) => {
         } else {
           currentStreamingMessage.toolCalls.push({
             id: data.id,
-            name: data.name,
+            name: (data.name && !isGenericName) ? data.name : 'Tool Execution',
             args: data.args,
             status: data.status || 'done',
             result: data.result,
@@ -788,6 +1092,18 @@ window.addEventListener('message', (event) => {
       currentStreamingMessage = null;
       renderAll();
       break;
+
+    case 'fileSearchResults': {
+      const match = getAtMatch();
+      if (match) {
+        atFilteredFiles = data.files || [];
+        atMenuIndex = 0;
+        renderAtMenu();
+      } else {
+        hideAtMenu();
+      }
+      break;
+    }
 
     case 'activeFile':
       if (fileChip && contextBar) {
