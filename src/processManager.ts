@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as path from 'path';
 import { EventEmitter } from 'events';
 import { AgyStreamEvent } from './types';
 
@@ -37,9 +38,18 @@ export class AgyProcessManager extends EventEmitter {
 
     const args: string[] = ['--output-format', 'stream-json', '-p', prompt];
 
-
     if (cwd) {
       args.push('--add-dir', cwd);
+    }
+
+    if (options.images && options.images.length > 0) {
+      for (const imgPath of options.images) {
+        args.push('--file', imgPath);
+        const imgDir = path.dirname(imgPath);
+        if (imgDir && imgDir !== cwd) {
+          args.push('--add-dir', imgDir);
+        }
+      }
     }
 
     if (this.currentConversationId) {

@@ -262,7 +262,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
     if (images && images.length > 0) {
       const imageList = images.map(img => `[Attached Image File: ${img}]`).join('\n');
-      parts.push(`Please inspect and analyze the attached image file(s):\n${imageList}`);
+      parts.push(`Please inspect and analyze the attached image file(s) using your image/file viewing tools:\n${imageList}`);
     }
 
     const editor = vscode.window.activeTextEditor;
