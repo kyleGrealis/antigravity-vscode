@@ -58,30 +58,6 @@ interface SlashDisplayItem {
 let SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', description: 'start a new conversation' },
   { name: 'clear', description: 'clear chat history' },
-  { 
-    name: 'model', 
-    description: 'set the model', 
-    hasArg: true, 
-    argHint: '<model-name>',
-    options: [
-      { value: 'flash-lite', label: 'Gemini 2.5 Flash Lite' },
-      { value: 'flash', label: 'Gemini 2.5 Flash' },
-      { value: 'pro', label: 'Gemini 2.5 Pro' },
-      { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
-      { value: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
-    ]
-  },
-  { 
-    name: 'effort', 
-    description: 'set reasoning effort', 
-    hasArg: true, 
-    argHint: 'low | medium | high',
-    options: [
-      { value: 'low', label: 'Low reasoning effort' },
-      { value: 'medium', label: 'Medium reasoning effort' },
-      { value: 'high', label: 'High reasoning effort' },
-    ]
-  },
   { name: 'settings', description: 'open extension settings' },
   { name: 'help', description: 'show available commands' },
 ];
@@ -1319,9 +1295,13 @@ function renderAll(autoScrollForce: boolean = false) {
     if (msg.tokens && (msg.tokens.input_tokens || msg.tokens.output_tokens)) {
       const usage = document.createElement('div');
       usage.className = 'usage-bar';
-      const parts = [`in: ${msg.tokens.input_tokens || 0}`, `out: ${msg.tokens.output_tokens || 0}`];
-      if (msg.tokens.thinking_tokens) parts.push(`think: ${msg.tokens.thinking_tokens}`);
-      usage.textContent = parts.join(' / ');
+      const inVal = msg.tokens.input_tokens || 0;
+      const outVal = msg.tokens.output_tokens || 0;
+      let html = `<span class="usage-label">in:</span> ${inVal} <span class="usage-sep">/</span> <span class="usage-label">out:</span> ${outVal}`;
+      if (msg.tokens.thinking_tokens) {
+        html += ` <span class="usage-sep">/</span> <span class="usage-label">think:</span> ${msg.tokens.thinking_tokens}`;
+      }
+      usage.innerHTML = html;
       el.appendChild(usage);
     }
 

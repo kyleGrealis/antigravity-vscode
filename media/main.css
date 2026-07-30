@@ -622,7 +622,18 @@ html, body {
   font-size: 10px;
   color: var(--text-secondary);
   margin-top: 6px;
-  opacity: 0.75;
+  opacity: 0.85;
+}
+
+.usage-label {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.usage-sep {
+  color: var(--text-secondary);
+  opacity: 0.4;
+  margin: 0 1px;
 }
 
 /* Input Area */
@@ -694,33 +705,61 @@ html, body {
 
 .input-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+}
+
+.model-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: #c084fc;
+  background: rgba(161, 66, 244, 0.12);
+  border: 1px solid rgba(161, 66, 244, 0.25);
+  padding: 2.5px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  user-select: none;
+  cursor: default;
 }
 
 .text-btn {
   background: none;
-  border: none;
+  border: 1px solid transparent;
   font-family: var(--font-mono);
   font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius);
+  padding: 2.5px 8px;
+  min-width: 52px;
+  text-align: center;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
 }
 
 .send-btn {
-  color: var(--text-link);
+  color: #a8c7fa;
+  background: rgba(138, 180, 248, 0.1);
+  border: 1px solid rgba(138, 180, 248, 0.22);
 }
 
 .send-btn:hover {
-  background: var(--bg-hover);
+  background: rgba(138, 180, 248, 0.2);
+  border-color: rgba(138, 180, 248, 0.4);
+  color: #ffffff;
 }
 
 .cancel-btn {
   color: var(--vscode-errorForeground, #f14c4c);
+  background: rgba(241, 76, 76, 0.1);
+  border: 1px solid rgba(241, 76, 76, 0.22);
 }
 
 .cancel-btn:hover {
-  background: var(--bg-hover);
+  background: rgba(241, 76, 76, 0.2);
+  border-color: rgba(241, 76, 76, 0.4);
 }
 
 /* Markdown Elements */

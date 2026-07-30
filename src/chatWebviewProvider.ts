@@ -163,30 +163,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const baseCommands = [
       { name: 'new', description: 'start a new conversation' },
       { name: 'clear', description: 'clear chat history' },
-      {
-        name: 'model',
-        description: 'set the model',
-        hasArg: true,
-        argHint: '<model-name>',
-        options: [
-          { value: 'flash-lite', label: 'Gemini 2.5 Flash Lite' },
-          { value: 'flash', label: 'Gemini 2.5 Flash' },
-          { value: 'pro', label: 'Gemini 2.5 Pro' },
-          { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
-          { value: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
-        ]
-      },
-      {
-        name: 'effort',
-        description: 'set reasoning effort',
-        hasArg: true,
-        argHint: 'low | medium | high',
-        options: [
-          { value: 'low', label: 'Low reasoning effort' },
-          { value: 'medium', label: 'Medium reasoning effort' },
-          { value: 'high', label: 'High reasoning effort' },
-        ]
-      },
       { name: 'plan', description: 'request step-by-step planning before execution' },
       { name: 'goal', description: 'run a long-running task with extra thoroughness' },
       { name: 'schedule', description: 'set a timer or recurring cron schedule' },
@@ -222,6 +198,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const webviews = targetWebview ? [targetWebview] : this.getWebviews();
     webviews.forEach(wv => {
       wv.postMessage({ type: 'setSlashCommands', commands: allCommands });
+    });
+  }
+
+  public sendActiveModel(targetWebview?: vscode.Webview) {
+    const config = vscode.workspace.getConfiguration('antigravity');
+    const model = config.get<string>('model') || 'gemini-2.5-pro';
+    const webviews = targetWebview ? [targetWebview] : this.getWebviews();
+    webviews.forEach(wv => {
+      wv.postMessage({ type: 'updateModel', model });
     });
   }
 
@@ -518,7 +503,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleSlashCommand(name: string, arg: string | undefined, webview: vscode.Webview) {
-    const uiCommands = ['new', 'clear', 'model', 'effort', 'settings', 'help', 'plan'];
+    const uiCommands = ['new', 'clear', 'settings', 'help', 'plan'];
     if (!uiCommands.includes(name)) {
       let promptText = '';
       if (name === 'skill') {
@@ -531,8 +516,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       this.onUserPrompt(promptText, []);
       return;
     }
-
-    const config = vscode.workspace.getConfiguration('antigravity');
 
     switch (name) {
       case 'new':
@@ -561,29 +544,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         webview.postMessage({ type: 'slashResult', name, message: 'Chat cleared.' });
         break;
 
-      case 'model': {
-        if (arg) {
-          config.update('model', arg, vscode.ConfigurationTarget.Global);
-          webview.postMessage({ type: 'slashResult', name, message: `Model set to ${arg}.` });
-        } else {
-          const current = config.get<string>('model') || '(default)';
-          webview.postMessage({ type: 'slashResult', name, message: `Current model: ${current}. Usage: /model <name>` });
-        }
-        break;
-      }
-
-      case 'effort': {
-        const valid = ['low', 'medium', 'high'];
-        if (arg && valid.includes(arg)) {
-          config.update('effort', arg, vscode.ConfigurationTarget.Global);
-          webview.postMessage({ type: 'slashResult', name, message: `Effort set to ${arg}.` });
-        } else {
-          const current = config.get<string>('effort') || '(default)';
-          webview.postMessage({ type: 'slashResult', name, message: `Current effort: ${current}. Options: low, medium, high` });
-        }
-        break;
-      }
-
       case 'settings':
         vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity');
         break;
@@ -592,8 +552,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         const help = [
           '/new        start a new conversation',
           '/clear      clear chat history',
-          '/model      set the model (/model <name>)',
-          '/effort     set reasoning effort (/effort low|medium|high)',
           '/settings   open extension settings',
           '/help       show this list',
         ].join('\n');
@@ -615,8 +573,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private executePrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const cliPath = config.get<string>('cliPath') || 'agy';
-    const model = config.get<string>('model') || undefined;
-    const effort = config.get<string>('effort') || undefined;
     const cwd = this.resolveWorkingDirectory();
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
     const skipPermissions = dangerouslySkipPermissions !== undefined
@@ -628,8 +584,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
 
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
-      model,
-      effort,
       dangerouslySkipPermissions: skipPermissions,
       images: normalizedImages,
     });

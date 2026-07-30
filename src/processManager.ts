@@ -23,8 +23,6 @@ export class AgyProcessManager extends EventEmitter {
     cwd: string,
     prompt: string,
     options: {
-      model?: string;
-      effort?: string;
       dangerouslySkipPermissions?: boolean;
       images?: string[];
     } = {}
@@ -56,14 +54,6 @@ export class AgyProcessManager extends EventEmitter {
 
     if (this.currentConversationId) {
       args.push('--conversation', this.currentConversationId);
-    }
-
-    if (options.model && options.model.trim()) {
-      args.push('--model', options.model.trim());
-    }
-
-    if (options.effort && options.effort.trim()) {
-      args.push('--effort', options.effort.trim());
     }
 
     if (options.dangerouslySkipPermissions === true) {

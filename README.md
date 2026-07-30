@@ -17,7 +17,7 @@ Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and 
 - **Side-by-Side Diff Previews**: Inspect proposed code modifications in native VS Code diff views with one click (`Compare in Editor ↗`).
 - **Case-Insensitive `@` File Mentions**: Type `@` for case-insensitive workspace file search and context insertion.
 - **Image Support**: Attach screenshot images to chat requests for visual context and UI debugging.
-- **Slash Commands & Skills**: Execute slash commands like `/model`, `/effort`, `/new`, `/clear`, `/plan`, or custom agent skills seamlessly.
+- **Slash Commands & Skills**: Execute slash commands like `/new`, `/clear`, `/plan`, `/settings`, or custom agent skills seamlessly.
 
 ---
 
@@ -54,8 +54,6 @@ This extension contributes the following settings (`antigravity.*`):
 | :--- | :--- | :--- |
 | `antigravity.cliPath` | `"agy"` | Path or executable name for the Antigravity CLI binary. |
 | `antigravity.dangerouslySkipPermissions` | `false` | Auto-approve tool permission requests without prompting. When disabled, prompts for confirmation. |
-| `antigravity.model` | `""` | Default model to pass to `agy`. |
-| `antigravity.effort` | `""` | Reasoning effort level (`low`, `medium`, `high`). |
 
 ---
 

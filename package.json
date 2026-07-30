@@ -42,22 +42,6 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Auto-approve all tool permission requests without prompting. When disabled (recommended), Antigravity will prompt for permission before executing tools."
-				},
-				"antigravity.model": {
-					"type": "string",
-					"default": "",
-					"description": "Default model to pass to agy (leave blank for CLI default)."
-				},
-				"antigravity.effort": {
-					"type": "string",
-					"enum": [
-						"",
-						"low",
-						"medium",
-						"high"
-					],
-					"default": "",
-					"description": "Reasoning effort level for agy (low, medium, high)."
 				}
 			}
 		},
