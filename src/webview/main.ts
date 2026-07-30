@@ -255,6 +255,16 @@ document.addEventListener('click', (e) => {
       historyDropdown.style.display = 'none';
     }
   }
+
+  const suggestionCard = (e.target as HTMLElement).closest('.suggestion-card');
+  if (suggestionCard) {
+    const promptText = suggestionCard.getAttribute('data-prompt');
+    if (promptText && input) {
+      input.value = promptText;
+      input.focus();
+      adjustInputHeight();
+    }
+  }
 });
 
 log?.addEventListener('click', (e) => {
@@ -610,7 +620,67 @@ function toPascalCaseName(name: string): string {
   if (nameMap[key]) return nameMap[key];
   return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
+function cleanValue(val: any): any {
+  if (typeof val !== 'string') return val;
+  let s = val.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    try {
+      const parsed = JSON.parse(s);
+      if (typeof parsed === 'string') s = parsed;
+    } catch {
+      s = s.slice(1, -1);
+    }
+  }
+  return s.replace(/\\\\/g, '\\');
+}
 
+function formatToolArgsForDisplay(toolName: string, rawArgs: any): { html?: string; text: string } {
+  let argsObj: any = rawArgs;
+  if (typeof rawArgs === 'string') {
+    try {
+      argsObj = JSON.parse(rawArgs);
+    } catch {
+      argsObj = rawArgs;
+    }
+  }
+
+  if (typeof argsObj !== 'object' || !argsObj) {
+    return { text: String(cleanValue(rawArgs || '')) };
+  }
+
+  const cleaned: Record<string, any> = {};
+  for (const k of Object.keys(argsObj)) {
+    cleaned[k] = cleanValue(argsObj[k]);
+  }
+
+  const normName = (toolName || '').toLowerCase().replace(/[-_]/g, '');
+
+  if (normName === 'runcommand' || normName === 'exec' || normName === 'terminal') {
+    const cmd = cleaned.CommandLine || cleaned.commandLine || cleaned.command || cleaned.cmd || '';
+    const cwd = cleaned.Cwd || cleaned.cwd || cleaned.directory || '';
+    const action = cleaned.toolAction || cleaned.toolSummary || cleaned.description || '';
+
+    let html = '<div class="formatted-args-container">';
+    if (cmd) {
+      html += `<div class="formatted-arg-row"><span class="arg-label">Command:</span><code class="arg-cmd-code">${escapeHtml(cmd)}</code></div>`;
+    }
+    if (cwd) {
+      const normCwd = String(cwd).replace(/\\/g, '/');
+      html += `<div class="formatted-arg-row"><span class="arg-label">Directory:</span><span class="arg-val">${escapeHtml(normCwd)}</span></div>`;
+    }
+    if (action && action !== cmd) {
+      html += `<div class="formatted-arg-row"><span class="arg-label">Action:</span><span class="arg-val">${escapeHtml(action)}</span></div>`;
+    }
+    html += '</div>';
+
+    return { html, text: cmd || JSON.stringify(cleaned, null, 2) };
+  }
+
+  delete cleaned.BypassSandbox;
+  delete cleaned.WaitMsBeforeAsync;
+
+  return { text: JSON.stringify(cleaned, null, 2) };
+}
 function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   let args = tc.args;
   if (typeof args === 'string') {
@@ -665,9 +735,75 @@ function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   };
 }
 
+function renderEmptyState() {
+  if (!log) return;
+  log.innerHTML = `
+    <div id="empty-state" class="empty-state">
+      <div class="empty-state-hero">
+        <svg class="empty-state-logo-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 112 112" fill="none">
+          <path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z" fill="#3186FF"/>
+          <mask id="empty_mask0" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="13" y="18" width="85" height="78">
+            <path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z" fill="black"/>
+          </mask>
+          <g mask="url(#empty_mask0)">
+            <g filter="url(#f0_empty)"><ellipse cx="22.7873" cy="26.8098" rx="22.7873" ry="26.8098" transform="matrix(-0.112784 0.99362 -0.99362 -0.112781 66.2473 -15.5344)" fill="#FFE432"/></g>
+            <g filter="url(#f1_empty)"><ellipse cx="96.491" cy="35.1231" rx="29.5007" ry="30.1492" transform="rotate(76.9243 96.491 35.1231)" fill="#FC413D"/></g>
+            <g filter="url(#f2_empty)"><ellipse cx="9.02988" cy="41.6647" rx="30.832" ry="39.9417" transform="rotate(74.1257 9.02988 41.6647)" fill="#00B95C"/></g>
+            <g filter="url(#f3_empty)"><ellipse cx="11.2212" cy="42.8915" rx="30.22" ry="33.2695" transform="rotate(45.6065 11.2212 42.8915)" fill="#00B95C"/></g>
+            <g filter="url(#f4_empty)"><ellipse cx="75.7546" cy="104.822" rx="29.0177" ry="27.943" transform="rotate(76.9243 75.7546 104.822)" fill="#3186FF"/></g>
+            <g filter="url(#f5_empty)"><ellipse cx="33.5661" cy="35.4043" rx="33.5661" ry="35.4043" transform="matrix(-0.409539 0.912293 -0.912294 -0.409537 101.25 -15.1674)" fill="#FBBC04"/></g>
+            <g filter="url(#f6_empty)"><path d="M2.56802 149.695C-15.8116 142.48 15.5987 83.1163 23.4093 63.2203C31.22 43.3244 52.4514 33.0447 70.831 40.26C89.2107 47.4753 110.996 87.2162 103.185 107.112C95.3742 127.008 20.9477 156.91 2.56802 149.695Z" fill="#3186FF"/></g>
+            <g filter="url(#f7_empty)"><path d="M113.934 75.8079C109.013 81.5509 96.1724 78.6224 85.253 69.2667C74.3335 59.911 69.4704 47.6711 74.391 41.928C79.3116 36.185 92.1525 39.1136 103.072 48.4692C113.991 57.8249 118.855 70.0648 113.934 75.8079Z" fill="#749BFF"/></g>
+            <g filter="url(#f8_empty)"><ellipse cx="92.611" cy="23.7962" rx="44.2411" ry="27.5016" transform="rotate(34.0763 92.611 23.7962)" fill="#FC413D"/></g>
+            <g filter="url(#f9_empty)"><ellipse cx="23.4949" cy="29.5887" rx="23.7071" ry="13.7869" transform="rotate(112.516 23.4949 29.5887)" fill="#FFEE48"/></g>
+          </g>
+          <defs>
+            <filter id="f0_empty" x="2.49" y="-26.54" width="69.09" height="61.25" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3.89"/></filter>
+            <filter id="f1_empty" x="28.75" y="-32.03" width="135.48" height="134.31" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="18.81"/></filter>
+            <filter id="f2_empty" x="-62.29" y="-21.93" width="142.64" height="127.18" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="15.99"/></filter>
+            <filter id="f3_empty" x="-34.25" y="-3.45" width="90.94" height="92.68" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="12.00"/></filter>
+            <filter id="f4_empty" x="28.02" y="56.78" width="95.47" height="96.08" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="10.00"/></filter>
+            <filter id="f5_empty" x="2.49" y="-26.54" width="69.09" height="61.25" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3.89"/></filter>
+            <filter id="f6_empty" x="-20" y="20" width="140" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="10.00"/></filter>
+            <filter id="f7_empty" x="50" y="20" width="80" height="80" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="8.00"/></filter>
+            <filter id="f8_empty" x="40" y="-10" width="105" height="70" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="12.00"/></filter>
+            <filter id="f9_empty" x="0" y="0" width="50" height="60" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="5.00"/></filter>
+          </defs>
+        </svg>
+        <div class="empty-state-title">Antigravity</div>
+        <div class="empty-state-subtitle">How can I help you build today?</div>
+      </div>
+      <div class="empty-state-suggestions">
+        <button class="suggestion-card" data-prompt="Explain the architecture of this workspace">
+          <span class="card-icon">🔍</span>
+          <span class="card-text">Explain workspace architecture</span>
+        </button>
+        <button class="suggestion-card" data-prompt="Help me write unit tests for this project">
+          <span class="card-icon">🧪</span>
+          <span class="card-text">Write unit tests</span>
+        </button>
+        <button class="suggestion-card" data-prompt="Find potential bugs or performance bottlenecks">
+          <span class="card-icon">⚡</span>
+          <span class="card-text">Audit bugs & performance</span>
+        </button>
+        <button class="suggestion-card" data-prompt="/plan Plan step-by-step feature implementation">
+          <span class="card-icon">📋</span>
+          <span class="card-text">Plan feature implementation</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function renderAll(autoScrollForce: boolean = false) {
   if (!log) return;
   const wasAtBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) <= 80;
+  
+  if (messages.length === 0) {
+    renderEmptyState();
+    return;
+  }
+
   log.innerHTML = '';
 
   for (const msg of messages) {
@@ -790,21 +926,17 @@ function renderAll(autoScrollForce: boolean = false) {
           title.textContent = 'Arguments';
           argsBlock.appendChild(title);
 
-          const pre = document.createElement('pre');
-          pre.className = 'tool-json-pre';
-          let formattedArgs = '';
-          if (typeof tc.args === 'string') {
-            try {
-              const parsed = JSON.parse(tc.args);
-              formattedArgs = JSON.stringify(parsed, null, 2);
-            } catch {
-              formattedArgs = tc.args;
-            }
+          const formatted = formatToolArgsForDisplay(tc.name, tc.args);
+          if (formatted.html) {
+            const container = document.createElement('div');
+            container.innerHTML = formatted.html;
+            argsBlock.appendChild(container);
           } else {
-            formattedArgs = JSON.stringify(tc.args, null, 2);
+            const pre = document.createElement('pre');
+            pre.className = 'tool-json-pre';
+            pre.textContent = formatted.text;
+            argsBlock.appendChild(pre);
           }
-          pre.textContent = formattedArgs;
-          argsBlock.appendChild(pre);
           bodyInner.appendChild(argsBlock);
         }
 
@@ -1526,20 +1658,116 @@ window.addEventListener('message', (event) => {
       renderHistoryDropdown(data.sessions, data.currentId);
       break;
 
-    case 'sessionSelected':
-      messages = [{
-        id: `sys-${Date.now()}`,
-        role: 'assistant',
-        text: `Switched session to ${data.conversationId.substring(0, 8)}. Session permissions reset.`
-      }];
+    case 'sessionLoaded': {
+      activeConversationId = data.conversationId;
+      messages = [];
       currentStreamingMessage = null;
-      renderAll();
+
+      if (headerSessionTitle) {
+        headerSessionTitle.textContent = data.title || (data.conversationId ? `Session ${data.conversationId.substring(0, 8)}` : 'Untitled');
+      }
+
+      if (data.events && Array.isArray(data.events)) {
+        let currentAssistantMsg: Message | null = null;
+        for (const evt of data.events) {
+          if (evt.type === 'userMessage') {
+            currentAssistantMsg = null;
+            messages.push({
+              id: `msg-${Date.now()}-${Math.random()}`,
+              role: 'user',
+              text: evt.text
+            });
+          } else if (evt.type === 'assistantText') {
+            if (!currentAssistantMsg) {
+              currentAssistantMsg = {
+                id: `msg-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                text: evt.text
+              };
+              messages.push(currentAssistantMsg);
+            } else {
+              currentAssistantMsg.text = (currentAssistantMsg.text ? currentAssistantMsg.text + '\n' : '') + evt.text;
+            }
+          } else if (evt.type === 'toolCall') {
+            if (!currentAssistantMsg) {
+              currentAssistantMsg = {
+                id: `msg-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                text: '',
+                toolCalls: []
+              };
+              messages.push(currentAssistantMsg);
+            }
+            if (!currentAssistantMsg.toolCalls) {
+              currentAssistantMsg.toolCalls = [];
+            }
+            currentAssistantMsg.toolCalls.push({
+              id: `tc-${Date.now()}-${Math.random()}`,
+              name: evt.name,
+              args: evt.args,
+              result: evt.result,
+              status: evt.status || 'done'
+            });
+          }
+        }
+      }
+
+      renderAll(true);
+      break;
+    }
+
+    case 'updateTitle':
+      if (headerSessionTitle && data.title) {
+        headerSessionTitle.textContent = data.title;
+      }
       break;
   }
 });
 
 vscode.postMessage({ command: 'getActiveFile' });
 vscode.postMessage({ command: 'getSlashCommands' });
+vscode.postMessage({ command: 'getSessions' });
+
+let activeConversationId: string | null = null;
+
+const headerSessionTitle = document.getElementById('header-session-title') as HTMLElement;
+const editHeaderTitleBtn = document.getElementById('edit-header-title-btn') as HTMLButtonElement;
+
+if (headerSessionTitle && editHeaderTitleBtn) {
+  const triggerHeaderRename = () => {
+    const currentTitle = headerSessionTitle.textContent || 'Untitled';
+    const inputEl = document.createElement('input');
+    inputEl.type = 'text';
+    inputEl.className = 'header-title-rename-input';
+    inputEl.value = currentTitle;
+    headerSessionTitle.replaceWith(inputEl);
+    inputEl.focus();
+    inputEl.select();
+
+    const saveHeaderTitle = () => {
+      const newTitle = inputEl.value.trim();
+      if (newTitle && activeConversationId) {
+        vscode.postMessage({ command: 'renameSession', conversationId: activeConversationId, title: newTitle });
+      }
+      inputEl.replaceWith(headerSessionTitle);
+      if (newTitle) headerSessionTitle.textContent = newTitle;
+    };
+
+    inputEl.addEventListener('blur', saveHeaderTitle);
+    inputEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        inputEl.blur();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        inputEl.replaceWith(headerSessionTitle);
+      }
+    });
+  };
+
+  editHeaderTitleBtn.addEventListener('click', triggerHeaderRename);
+  headerSessionTitle.addEventListener('dblclick', triggerHeaderRename);
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -1550,50 +1778,125 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
+let cachedSessionsList: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }> = [];
+
 function renderHistoryDropdown(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }>, currentId?: string | null) {
   if (!historyDropdown) return;
-  if (!sessions || sessions.length === 0) {
-    historyDropdown.innerHTML = `
-      <div class="history-header">
-        <span>Session History</span>
-      </div>
-      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
-        No previous sessions found.
-      </div>
-    `;
-    return;
-  }
+  cachedSessionsList = sessions || [];
+  renderFilteredSessions(cachedSessionsList, currentId, '');
+}
+
+function renderFilteredSessions(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }>, currentId?: string | null, searchQuery = '') {
+  if (!historyDropdown) return;
+
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = query
+    ? sessions.filter(s => s.title.toLowerCase().includes(query) || s.id.toLowerCase().includes(query))
+    : sessions;
 
   let html = `
     <div class="history-header">
       <span>Session History</span>
-      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${sessions.length} sessions</span>
+      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${filtered.length} sessions</span>
     </div>
+    <div class="history-search-container">
+      <input type="text" id="history-search-input" placeholder="Search sessions..." value="${escapeHtml(searchQuery)}" autocomplete="off" />
+    </div>
+    <div class="history-items-list">
   `;
 
-  for (const s of sessions) {
-    const isActive = currentId && currentId === s.id;
+  if (filtered.length === 0) {
     html += `
-      <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
-        <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
-        <div class="history-item-meta">
-          <span>${s.id.substring(0, 8)}</span>
-          <span>${s.relativeTime}</span>
-        </div>
+      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+        No matching sessions found.
       </div>
     `;
+  } else {
+    for (const s of filtered) {
+      const isActive = currentId && currentId === s.id;
+      html += `
+        <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
+          <div class="history-item-content">
+            <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
+            <div class="history-item-meta">
+              <span class="history-item-id">${s.id.substring(0, 8)}</span>
+              <span class="history-item-time">${s.relativeTime}</span>
+            </div>
+          </div>
+          <button class="history-item-edit-btn icon-btn" title="Rename session" data-id="${s.id}">&#9999;&#65039;</button>
+        </div>
+      `;
+    }
   }
 
+  html += `</div>`;
   historyDropdown.innerHTML = html;
+
+  const searchInput = historyDropdown.querySelector('#history-search-input') as HTMLInputElement;
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      renderFilteredSessions(cachedSessionsList, currentId, (e.target as HTMLInputElement).value);
+    });
+    if (searchQuery) {
+      searchInput.focus();
+      searchInput.setSelectionRange(searchQuery.length, searchQuery.length);
+    }
+  }
 
   const items = historyDropdown.querySelectorAll('.history-item');
   items.forEach((item) => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.history-item-edit-btn')) {
+        return;
+      }
       const convId = item.getAttribute('data-id');
       if (convId) {
         historyDropdown.style.display = 'none';
         vscode.postMessage({ command: 'selectSession', conversationId: convId });
       }
+    });
+  });
+
+  const editBtns = historyDropdown.querySelectorAll('.history-item-edit-btn');
+  editBtns.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const convId = btn.getAttribute('data-id');
+      if (!convId) return;
+      const targetSession = cachedSessionsList.find(s => s.id === convId);
+      const currentTitle = targetSession ? targetSession.title : '';
+      const itemEl = btn.closest('.history-item');
+      if (!itemEl) return;
+      const titleEl = itemEl.querySelector('.history-item-title') as HTMLElement;
+      if (!titleEl) return;
+
+      const inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.className = 'history-item-rename-input';
+      inputEl.value = currentTitle;
+      titleEl.replaceWith(inputEl);
+      inputEl.focus();
+      inputEl.select();
+
+      const save = () => {
+        const newTitle = inputEl.value.trim();
+        if (newTitle && newTitle !== currentTitle) {
+          vscode.postMessage({ command: 'renameSession', conversationId: convId, title: newTitle });
+        } else {
+          inputEl.replaceWith(titleEl);
+        }
+      };
+
+      inputEl.addEventListener('blur', save);
+      inputEl.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          inputEl.blur();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          inputEl.replaceWith(titleEl);
+        }
+      });
     });
   });
 }

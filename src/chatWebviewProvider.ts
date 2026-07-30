@@ -76,8 +76,21 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly processManager: AgyProcessManager,
-    private readonly diffController: DiffController
+    private readonly diffController: DiffController,
+    private readonly context?: vscode.ExtensionContext
   ) {
+    let restoredId = this.context?.workspaceState.get<string>('activeConversationId');
+    if (!restoredId) {
+      const sessions = this.getSessionsList();
+      if (sessions.length > 0) {
+        restoredId = sessions[0].id;
+        this.context?.workspaceState.update('activeConversationId', restoredId);
+      }
+    }
+    if (restoredId && !this.processManager.getConversationId()) {
+      this.processManager.setConversationId(restoredId);
+    }
+
     this.processManager.on('event', (event: AgyStreamEvent) => {
       this.handleAgyEvent(event);
     });
@@ -236,12 +249,43 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           this.sessionSkipPermissions = false;
           this.sessionAllowedCommands.clear();
           this.processManager.newSession();
+          if (this.context) {
+            this.context.workspaceState.update('activeConversationId', undefined);
+          }
+          webview.postMessage({ type: 'sessionLoaded', conversationId: null, title: 'Untitled', events: [] });
           break;
 
         case 'getSessions': {
+          let currentId = this.processManager.getConversationId();
+          if (!currentId) {
+            currentId = this.context?.workspaceState.get<string>('activeConversationId') || null;
+            if (!currentId) {
+              const sessions = this.getSessionsList();
+              if (sessions.length > 0) {
+                currentId = sessions[0].id;
+              }
+            }
+            if (currentId) {
+              this.processManager.setConversationId(currentId);
+              if (this.context) {
+                this.context.workspaceState.update('activeConversationId', currentId);
+              }
+            }
+          }
           const sessions = this.getSessionsList();
-          const currentId = this.processManager.getConversationId();
           webview.postMessage({ type: 'sessionsList', sessions, currentId });
+          if (currentId) {
+            const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+            const convDir = path.join(brainDir, currentId);
+            const title = this.getSessionTitle(currentId, convDir);
+            const events = this.loadSessionHistory(currentId);
+            webview.postMessage({
+              type: 'sessionLoaded',
+              conversationId: currentId,
+              title,
+              events
+            });
+          }
           break;
         }
 
@@ -249,7 +293,35 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           this.sessionSkipPermissions = false;
           this.sessionAllowedCommands.clear();
           this.processManager.setConversationId(message.conversationId);
-          webview.postMessage({ type: 'sessionSelected', conversationId: message.conversationId });
+          if (this.context) {
+            this.context.workspaceState.update('activeConversationId', message.conversationId);
+          }
+          const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+          const convDir = path.join(brainDir, message.conversationId);
+          const title = this.getSessionTitle(message.conversationId, convDir);
+          const events = this.loadSessionHistory(message.conversationId);
+
+          webview.postMessage({
+            type: 'sessionLoaded',
+            conversationId: message.conversationId,
+            title,
+            events
+          });
+          break;
+        }
+
+        case 'renameSession': {
+          if (message.conversationId && message.title) {
+            this.saveSessionTitle(message.conversationId, message.title);
+            const sessions = this.getSessionsList();
+            const currentId = this.processManager.getConversationId();
+            this.getWebviews().forEach((wv) => {
+              wv.postMessage({ type: 'sessionsList', sessions, currentId });
+              if (currentId === message.conversationId) {
+                wv.postMessage({ type: 'updateTitle', title: message.title });
+              }
+            });
+          }
           break;
         }
 
@@ -537,6 +609,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleAgyEvent(event: AgyStreamEvent) {
+    const currentId = this.processManager.getConversationId();
+    if (currentId && this.context) {
+      this.context.workspaceState.update('activeConversationId', currentId);
+    }
+
     const webviews = this.getWebviews();
 
     if (event.event === 'step_update' && event.step_update) {
@@ -706,13 +783,17 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   private async handleSearchFiles(query: string, webview: vscode.Webview) {
     try {
-      const searchPattern = query ? `**/*${query}*` : '**/*';
       const excludePattern = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/.antigravity/**}';
-      const uris = await vscode.workspace.findFiles(searchPattern, excludePattern, 50);
-      const files = uris.map((u) => vscode.workspace.asRelativePath(u));
+      const uris = await vscode.workspace.findFiles('**/*', excludePattern, 300);
+      let files = uris.map((u) => vscode.workspace.asRelativePath(u));
+
+      const q = (query || '').trim().toLowerCase();
+      if (q) {
+        files = files.filter((f) => f.toLowerCase().includes(q));
+      }
 
       files.sort((a, b) => {
-        const q = (query || '').toLowerCase();
+        if (!q) return a.localeCompare(b);
         const aBase = path.basename(a).toLowerCase();
         const bBase = path.basename(b).toLowerCase();
         const aStarts = aBase.startsWith(q);
@@ -722,7 +803,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         return a.localeCompare(b);
       });
 
-      webview.postMessage({ type: 'fileSearchResults', query, files });
+      webview.postMessage({ type: 'fileSearchResults', query, files: files.slice(0, 50) });
     } catch (err) {
       console.error('Failed to search files for @ completion:', err);
       webview.postMessage({ type: 'fileSearchResults', query, files: [] });
@@ -734,6 +815,136 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     if (this.view) list.push(this.view.webview);
     if (this.currentPanel) list.push(this.currentPanel.webview);
     return list;
+  }
+
+  private getSessionTitle(convId: string, convDir: string): string {
+    const customTitlePath = path.join(convDir, 'title.txt');
+    if (fs.existsSync(customTitlePath)) {
+      try {
+        const customTitle = fs.readFileSync(customTitlePath, 'utf-8').trim();
+        if (customTitle) return customTitle;
+      } catch {}
+    }
+
+    let title = `Session ${convId.substring(0, 8)}`;
+    const logPath = path.join(convDir, '.system_generated', 'logs', 'transcript.jsonl');
+    const altLogPath = path.join(convDir, 'transcript.jsonl');
+    const targetLog = fs.existsSync(logPath) ? logPath : (fs.existsSync(altLogPath) ? altLogPath : null);
+
+    if (targetLog) {
+      try {
+        const content = fs.readFileSync(targetLog, 'utf-8');
+        const lines = content.split('\n');
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const parsed = JSON.parse(line);
+          if (parsed.type === 'USER_INPUT' && parsed.content) {
+            const reqMatch = parsed.content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+            const rawText = reqMatch ? reqMatch[1].trim() : parsed.content.trim();
+            const cleanLines = rawText.split('\n').filter((l: string) => {
+              const t = l.trim();
+              return !t.startsWith('[SYSTEM ENVIRONMENT NOTE') &&
+                     !t.startsWith('[ATTACHED IMAGES]') &&
+                     !t.startsWith('IMPORTANT:') &&
+                     !t.startsWith('The user attached');
+            });
+            const firstLine = cleanLines.join(' ').trim();
+            if (firstLine) {
+              title = firstLine.length > 45 ? firstLine.substring(0, 42) + '...' : firstLine;
+              break;
+            }
+          }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+    return title;
+  }
+
+  private saveSessionTitle(convId: string, title: string): void {
+    try {
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+      const convDir = path.join(brainDir, convId);
+      if (fs.existsSync(convDir)) {
+        fs.writeFileSync(path.join(convDir, 'title.txt'), title.trim(), 'utf-8');
+      }
+    } catch (err) {
+      console.error('Failed to save session title:', err);
+    }
+  }
+
+  private loadSessionHistory(convId: string): Array<{ type: string; [key: string]: any }> {
+    try {
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+      const convDir = path.join(brainDir, convId);
+      const logPath = path.join(convDir, '.system_generated', 'logs', 'transcript.jsonl');
+      const altLogPath = path.join(convDir, 'transcript.jsonl');
+      const targetLog = fs.existsSync(logPath) ? logPath : (fs.existsSync(altLogPath) ? altLogPath : null);
+
+      if (!targetLog) return [];
+
+      const content = fs.readFileSync(targetLog, 'utf-8');
+      const lines = content.split('\n');
+      const events: Array<{ type: string; [key: string]: any }> = [];
+      let lastToolCallRef: any = null;
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === 'USER_INPUT' && parsed.content) {
+            lastToolCallRef = null;
+            const reqMatch = parsed.content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+            const rawText = reqMatch ? reqMatch[1].trim() : parsed.content.trim();
+            const cleanLines = rawText.split('\n').filter((l: string) => {
+              const t = l.trim();
+              return !t.startsWith('[SYSTEM ENVIRONMENT NOTE') &&
+                     !t.startsWith('[ATTACHED IMAGES]') &&
+                     !t.startsWith('IMPORTANT:') &&
+                     !t.startsWith('The user attached');
+            });
+            const cleanText = cleanLines.join('\n').trim();
+            if (cleanText) {
+              events.push({ type: 'userMessage', text: cleanText });
+            }
+          } else if (parsed.type === 'PLANNER_RESPONSE' || parsed.type === 'MODEL') {
+            if (parsed.content) {
+              events.push({ type: 'assistantText', text: parsed.content });
+            }
+            if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+              for (const tc of parsed.tool_calls) {
+                const toolEvent = {
+                  type: 'toolCall',
+                  name: tc.name || tc.function?.name || 'tool',
+                  args: tc.args || tc.parameters || tc.function?.arguments,
+                  result: tc.result || tc.output,
+                  status: tc.error ? 'error' : 'done'
+                };
+                events.push(toolEvent);
+                lastToolCallRef = toolEvent;
+              }
+            }
+          } else {
+            const outputText = parsed.content || parsed.result || parsed.output || (parsed.error ? `[Error] ${parsed.error}` : '');
+            if (lastToolCallRef && outputText && parsed.type && parsed.type !== 'CHECKPOINT' && parsed.type !== 'CONVERSATION_HISTORY' && parsed.type !== 'SYSTEM_MESSAGE') {
+              if (!lastToolCallRef.result) {
+                lastToolCallRef.result = outputText;
+              }
+              if (parsed.exit_code && parsed.exit_code !== 0) {
+                lastToolCallRef.status = 'error';
+              }
+            }
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+      return events;
+    } catch (err) {
+      console.error('Failed to load session history:', err);
+      return [];
+    }
   }
 
   private getSessionsList(): Array<{ id: string; title: string; updatedAt: number; relativeTime: string }> {
@@ -757,34 +968,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           continue;
         }
 
-        let title = `Session ${convId.substring(0, 8)}`;
-
-        const logPath = path.join(convDir, '.system_generated', 'logs', 'transcript.jsonl');
-        const altLogPath = path.join(convDir, 'transcript.jsonl');
-        const targetLog = fs.existsSync(logPath) ? logPath : (fs.existsSync(altLogPath) ? altLogPath : null);
-
-        if (targetLog) {
-          try {
-            const content = fs.readFileSync(targetLog, 'utf-8');
-            const lines = content.split('\n');
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              const parsed = JSON.parse(line);
-              if (parsed.type === 'USER_INPUT' && parsed.content) {
-                const reqMatch = parsed.content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
-                const rawText = reqMatch ? reqMatch[1].trim() : parsed.content.trim();
-                const firstLine = rawText.split('\n')[0].trim();
-                if (firstLine) {
-                  title = firstLine.length > 45 ? firstLine.substring(0, 42) + '...' : firstLine;
-                  break;
-                }
-              }
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        }
-
+        const title = this.getSessionTitle(convId, convDir);
         const date = new Date(updatedAt);
         const relativeTime = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -807,6 +991,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private getHtmlForWebview(webview: vscode.Webview): string {
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js'));
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'main.css'));
+    const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'antigravity-icon.svg'));
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -819,7 +1004,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 <body>
 	<div class="app-container">
 		<div class="header-bar">
-			<span class="header-title">antigravity</span>
+			<div class="header-left">
+				<img src="${logoUri}" class="header-logo" alt="Antigravity" />
+				<span id="header-session-title" class="header-title" title="Double click to rename session">Untitled</span>
+				<button id="edit-header-title-btn" class="icon-btn edit-title-btn" title="Rename session">&#9999;&#65039;</button>
+			</div>
 			<div class="header-actions">
 				<button id="history-btn" class="icon-btn" title="Session History">&#128340;</button>
 				<button id="new-chat-btn" class="icon-btn" title="New conversation">+</button>
@@ -828,7 +1017,33 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
 		<div id="history-dropdown" class="history-dropdown" style="display: none;"></div>
 
-		<div id="chat-messages" class="message-log"></div>
+		<div id="chat-messages" class="message-log">
+			<div id="empty-state" class="empty-state">
+				<div class="empty-state-hero">
+					<img src="${logoUri}" class="empty-state-logo-img" alt="Antigravity" />
+					<div class="empty-state-title">Antigravity</div>
+					<div class="empty-state-subtitle">How can I help you build today?</div>
+				</div>
+				<div class="empty-state-suggestions">
+					<button class="suggestion-card" data-prompt="Explain the architecture of this workspace">
+						<span class="card-icon">🔍</span>
+						<span class="card-text">Explain workspace architecture</span>
+					</button>
+					<button class="suggestion-card" data-prompt="Help me write unit tests for this project">
+						<span class="card-icon">🧪</span>
+						<span class="card-text">Write unit tests</span>
+					</button>
+					<button class="suggestion-card" data-prompt="Find potential bugs or performance bottlenecks">
+						<span class="card-icon">⚡</span>
+						<span class="card-text">Audit bugs & performance</span>
+					</button>
+					<button class="suggestion-card" data-prompt="/plan Plan step-by-step feature implementation">
+						<span class="card-icon">📋</span>
+						<span class="card-text">Plan feature implementation</span>
+					</button>
+				</div>
+			</div>
+		</div>
 
 		<div class="input-area">
 			<div id="context-bar" class="context-bar" style="display: none;">
