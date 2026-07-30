@@ -524,6 +524,56 @@ html, body {
   font-size: 11px;
 }
 
+/* Git Commit Card */
+.commit-card {
+  background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--vscode-gitDecoration-addedResourceForeground, #4ec9b0);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+
+.commit-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.commit-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(78, 201, 176, 0.15);
+  color: var(--vscode-gitDecoration-addedResourceForeground, #4ec9b0);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.commit-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.commit-bullet-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.commit-bullet-list li {
+  margin-bottom: 3px;
+}
+
 .diff-add {
   color: var(--vscode-gitDecoration-addedResourceForeground, #4ec9b0);
   background-color: rgba(46, 160, 67, 0.15);

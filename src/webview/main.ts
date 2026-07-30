@@ -738,6 +738,33 @@ function formatToolArgsForDisplay(toolName: string, rawArgs: any): { html?: stri
     const cwd = cleaned.Cwd || cleaned.cwd || cleaned.directory || '';
     const action = cleaned.toolAction || cleaned.toolSummary || cleaned.description || '';
 
+    if (cmd && cmd.trim().startsWith('git commit')) {
+      const msgs: string[] = [];
+      const regex = /-m\s+(?:"([^"]+)"|'([^']+)'|(\S+))/g;
+      let m;
+      while ((m = regex.exec(cmd)) !== null) {
+        const val = m[1] || m[2] || m[3];
+        if (val) msgs.push(val.trim());
+      }
+      if (msgs.length > 0) {
+        const commitTitle = msgs[0];
+        const commitBullets = msgs.slice(1);
+        let html = '<div class="commit-card">';
+        html += '<div class="commit-card-header"><span class="commit-badge">git commit</span></div>';
+        html += `<div class="commit-title">${escapeHtml(commitTitle)}</div>`;
+        if (commitBullets.length > 0) {
+          html += '<ul class="commit-bullet-list">';
+          for (const b of commitBullets) {
+            const cleanBullet = b.replace(/^[-*•]\s*/, '');
+            html += `<li>${escapeHtml(cleanBullet)}</li>`;
+          }
+          html += '</ul>';
+        }
+        html += '</div>';
+        return { html, text: cmd };
+      }
+    }
+
     let html = '<div class="formatted-args-container">';
     if (cmd) {
       html += `<div class="formatted-arg-row"><span class="arg-label">Command:</span><code class="arg-cmd-code">${escapeHtml(cmd)}</code></div>`;
@@ -1060,9 +1087,13 @@ function renderAll(autoScrollForce: boolean = false) {
           let rawResultStr = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
           const hasDiffBlock = rawResultStr.includes('[diff_block_start]');
           
-          const cleanOutputText = hasDiffBlock
+          let cleanOutputText = hasDiffBlock
             ? rawResultStr.replace(/\[diff_block_start\][\s\S]*?\[diff_block_end\]/g, '').replace(/The following changes were made by the \w+ tool to:[^\n]*/g, '').trim()
             : (diffStr && isDiffText(rawResultStr) ? '' : rawResultStr.trim());
+
+          if (cleanOutputText) {
+            cleanOutputText = cleanOutputText.split('\n').map(l => l.replace(/^\t+/, '').replace(/^[ ]{8,}/, '')).join('\n').trim();
+          }
 
           if (cleanOutputText) {
             hasContent = true;
@@ -1434,6 +1465,22 @@ function extractTargetFile(toolName: string, rawArgs: any, rawResult?: any): str
   return undefined;
 }
 
+function getArgVal(obj: any, ...keys: string[]): any {
+  if (!obj || typeof obj !== 'object') return undefined;
+  for (const k of keys) {
+    if (obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') return obj[k];
+  }
+  const lowerMap: Record<string, any> = {};
+  for (const k of Object.keys(obj)) {
+    lowerMap[k.toLowerCase()] = obj[k];
+  }
+  for (const k of keys) {
+    const lk = k.toLowerCase();
+    if (lowerMap[lk] !== undefined && lowerMap[lk] !== null && String(lowerMap[lk]).trim() !== '') return lowerMap[lk];
+  }
+  return undefined;
+}
+
 function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any): string | null {
   const name = (toolName || '').toLowerCase();
   const normName = name.replace(/[-_]/g, '');
@@ -1453,18 +1500,20 @@ function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any):
 
   // 2. Build diff from args if present
   if (typeof args === 'object' && args) {
-    const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
+    const file = getArgVal(args, 'TargetFile', 'targetFile', 'target_file', 'path', 'file') || '';
     const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
 
     let diffLines: string[] = [];
 
     if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
-      const target = args.TargetContent || args.targetContent || args.target_content || '';
-      const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
+      const target = getArgVal(args, 'TargetContent', 'targetContent', 'target_content', 'target', 'oldContent', 'old_content');
+      const replacement = getArgVal(args, 'ReplacementContent', 'replacementContent', 'replacement_content', 'replacement', 'newContent', 'new_content');
+      const instr = getArgVal(args, 'Instruction', 'instruction', 'Description', 'description');
+
       if (target || replacement) {
         diffLines.push(`--- a/${fileName}`);
         diffLines.push(`+++ b/${fileName}`);
-        diffLines.push(`@@ edit @@`);
+        diffLines.push(`@@ ${instr || 'edit'} @@`);
         if (target) {
           String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
         }
@@ -1473,14 +1522,14 @@ function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any):
         }
       }
     } else if (normName.includes('multireplacefilecontent')) {
-      const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
+      const chunks = getArgVal(args, 'ReplacementChunks', 'replacementChunks', 'replacement_chunks', 'chunks') || [];
       if (Array.isArray(chunks) && chunks.length > 0) {
         diffLines.push(`--- a/${fileName}`);
         diffLines.push(`+++ b/${fileName}`);
         chunks.forEach((chunk: any, idx: number) => {
+          const target = getArgVal(chunk, 'TargetContent', 'targetContent', 'target_content', 'target');
+          const replacement = getArgVal(chunk, 'ReplacementContent', 'replacementContent', 'replacement_content', 'replacement');
           diffLines.push(`@@ chunk ${idx + 1} @@`);
-          const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
-          const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
           if (target) {
             String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
           }
@@ -1490,13 +1539,22 @@ function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any):
         });
       }
     } else if (normName.includes('writetofile') || normName.includes('writefile')) {
-      const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
+      const code = getArgVal(args, 'CodeContent', 'codeContent', 'code_content', 'code');
+      const instr = getArgVal(args, 'Instruction', 'instruction', 'Description', 'description');
       if (code) {
         diffLines.push(`--- /dev/null`);
         diffLines.push(`+++ b/${fileName}`);
-        diffLines.push(`@@ new file @@`);
+        diffLines.push(`@@ ${instr || 'new file'} @@`);
         String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
       }
+    }
+
+    if (diffLines.length === 0 && (normName.includes('replacefilecontent') || normName.includes('writetofile') || normName.includes('writefile'))) {
+      const instr = getArgVal(args, 'Instruction', 'instruction', 'Description', 'description');
+      diffLines.push(`--- a/${fileName}`);
+      diffLines.push(`+++ b/${fileName}`);
+      diffLines.push(`@@ ${instr || 'file edit'} @@`);
+      diffLines.push(`+ ${instr || `File modified: ${file || fileName}`}`);
     }
 
     if (diffLines.length > 0) {
