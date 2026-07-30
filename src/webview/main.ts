@@ -689,10 +689,10 @@ function renderAll(autoScrollForce: boolean = false) {
 
       for (const tc of msg.toolCalls) {
         const accordion = document.createElement('div');
-        accordion.className = 'tool-accordion';
+        accordion.className = `tool-accordion${tc.expanded ? ' open' : ''}`;
 
         const header = document.createElement('div');
-        header.className = 'tool-header';
+        header.className = `tool-header${tc.expanded ? ' open' : ''}`;
 
         const statusIcon = document.createElement('span');
         const statusClass = tc.status || 'done';
@@ -737,7 +737,7 @@ function renderAll(autoScrollForce: boolean = false) {
 
         let hasContent = false;
 
-        const diffStr = buildDiffFromToolArgs(tc.name, tc.args);
+        const diffStr = buildDiffFromToolArgs(tc.name, tc.args, tc.result);
         if (diffStr) {
           hasContent = true;
           const diffBlock = document.createElement('div');
@@ -751,8 +751,7 @@ function renderAll(autoScrollForce: boolean = false) {
           title.textContent = 'Changes (Diff)';
           diffHeader.appendChild(title);
 
-          const argsObj = typeof tc.args === 'object' && tc.args !== null ? (tc.args as Record<string, any>) : undefined;
-          const targetFile = argsObj?.TargetFile || argsObj?.targetFile || argsObj?.target_file || argsObj?.path || argsObj?.file;
+          const targetFile = extractTargetFile(tc.name, tc.args, tc.result);
           if (targetFile) {
             const openDiffBtn = document.createElement('button');
             openDiffBtn.className = 'open-diff-btn';
@@ -779,7 +778,10 @@ function renderAll(autoScrollForce: boolean = false) {
           bodyInner.appendChild(diffBlock);
         }
 
-        if (tc.args && (typeof tc.args === 'string' || (typeof tc.args === 'object' && Object.keys(tc.args).length > 0))) {
+        const normToolName = (tc.name || '').toLowerCase().replace(/[-_]/g, '');
+        const isFileEditTool = normToolName.includes('replacefilecontent') || normToolName.includes('writetofile') || normToolName.includes('writefile');
+
+        if (!diffStr && !isFileEditTool && tc.args && (typeof tc.args === 'string' || (typeof tc.args === 'object' && Object.keys(tc.args).length > 0))) {
           hasContent = true;
           const argsBlock = document.createElement('div');
           argsBlock.className = 'tool-args-block';
@@ -807,126 +809,131 @@ function renderAll(autoScrollForce: boolean = false) {
         }
 
         if (tc.result !== undefined && tc.result !== null && String(tc.result).trim() !== '') {
-          hasContent = true;
-          const resultBlock = document.createElement('div');
-          resultBlock.className = 'tool-result-block';
-          const title = document.createElement('div');
-          title.className = 'tool-block-title';
-          title.textContent = 'Output';
-          resultBlock.appendChild(title);
+          let rawResultStr = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
+          const hasDiffBlock = rawResultStr.includes('[diff_block_start]');
+          
+          const cleanOutputText = hasDiffBlock
+            ? rawResultStr.replace(/\[diff_block_start\][\s\S]*?\[diff_block_end\]/g, '').replace(/The following changes were made by the \w+ tool to:[^\n]*/g, '').trim()
+            : (diffStr && isDiffText(rawResultStr) ? '' : rawResultStr.trim());
 
-          const pre = document.createElement('pre');
-          pre.className = 'tool-json-pre';
-          let formattedResult = tc.result;
-          if (typeof formattedResult === 'string') {
+          if (cleanOutputText) {
+            hasContent = true;
+            const resultBlock = document.createElement('div');
+            resultBlock.className = 'tool-result-block';
+            const title = document.createElement('div');
+            title.className = 'tool-block-title';
+            title.textContent = 'Output';
+            resultBlock.appendChild(title);
+
+            const pre = document.createElement('pre');
+            pre.className = 'tool-json-pre';
+            let formattedResult: any = cleanOutputText;
             try {
-              const parsed = JSON.parse(formattedResult);
+              const parsed = JSON.parse(cleanOutputText);
               formattedResult = JSON.stringify(parsed, null, 2);
             } catch {}
-          } else {
-            formattedResult = JSON.stringify(formattedResult, null, 2);
-          }
-          if (typeof formattedResult === 'string') {
-            pre.innerHTML = renderDiffOrTextHtml(formattedResult);
-          } else {
-            pre.textContent = String(formattedResult);
-          }
-          resultBlock.appendChild(pre);
+            if (typeof formattedResult === 'string') {
+              pre.innerHTML = renderDiffOrTextHtml(formattedResult);
+            } else {
+              pre.textContent = String(formattedResult);
+            }
+            resultBlock.appendChild(pre);
 
-          if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
-            const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
-            const rawCmd = match ? match[1].trim() : '';
-            const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
+            if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
+              const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
+              const rawCmd = match ? match[1].trim() : '';
+              const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
 
-            const actionBar = document.createElement('div');
-            actionBar.className = 'perm-action-bar';
-            actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
+              const actionBar = document.createElement('div');
+              actionBar.className = 'perm-action-bar';
+              actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
 
-            if (cmd) {
-              const displayCmd = cmd.length > 28 ? cmd.substring(0, 25) + '...' : cmd;
-              const yesBtn = document.createElement('button');
-              yesBtn.className = 'perm-btn perm-btn-primary';
-              yesBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
-              yesBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                yesBtn.disabled = true;
-                yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
-                if (sessionBtn) sessionBtn.disabled = true;
-                if (noBtn) noBtn.disabled = true;
+              if (cmd) {
+                const displayCmd = cmd.length > 28 ? cmd.substring(0, 25) + '...' : cmd;
+                const yesBtn = document.createElement('button');
+                yesBtn.className = 'perm-btn perm-btn-primary';
+                yesBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
+                yesBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  yesBtn.disabled = true;
+                  yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
+                  if (sessionBtn) sessionBtn.disabled = true;
+                  if (noBtn) noBtn.disabled = true;
 
-                currentStreamingMessage = {
-                  id: `a-${Date.now()}`,
-                  role: 'assistant',
-                  text: '',
-                  thinking: '',
-                  toolCalls: [],
-                  isStreaming: true,
-                };
-                messages.push(currentStreamingMessage);
-                renderAll(true);
-                setBusy(true);
+                  currentStreamingMessage = {
+                    id: `a-${Date.now()}`,
+                    role: 'assistant',
+                    text: '',
+                    thinking: '',
+                    toolCalls: [],
+                    isStreaming: true,
+                  };
+                  messages.push(currentStreamingMessage);
+                  renderAll(true);
+                  setBusy(true);
 
-                vscode.postMessage({ command: 'permissionResponse', choice: 'yes' });
-              });
-              actionBar.appendChild(yesBtn);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'yes' });
+                });
+                actionBar.appendChild(yesBtn);
 
-              const sessionBtn = document.createElement('button');
-              sessionBtn.className = 'perm-btn perm-btn-secondary';
-              sessionBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              sessionBtn.textContent = '✓ Yes for all commands in this session';
-              sessionBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                sessionBtn.disabled = true;
-                sessionBtn.textContent = '✓ Yes for session - resuming...';
-                if (yesBtn) yesBtn.disabled = true;
-                if (noBtn) noBtn.disabled = true;
+                const sessionBtn = document.createElement('button');
+                sessionBtn.className = 'perm-btn perm-btn-secondary';
+                sessionBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                sessionBtn.textContent = '✓ Yes for all commands in this session';
+                sessionBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  sessionBtn.disabled = true;
+                  sessionBtn.textContent = '✓ Yes for session - resuming...';
+                  if (yesBtn) yesBtn.disabled = true;
+                  if (noBtn) noBtn.disabled = true;
 
-                currentStreamingMessage = {
-                  id: `a-${Date.now()}`,
-                  role: 'assistant',
-                  text: '',
-                  thinking: '',
-                  toolCalls: [],
-                  isStreaming: true,
-                };
-                messages.push(currentStreamingMessage);
-                renderAll(true);
-                setBusy(true);
+                  currentStreamingMessage = {
+                    id: `a-${Date.now()}`,
+                    role: 'assistant',
+                    text: '',
+                    thinking: '',
+                    toolCalls: [],
+                    isStreaming: true,
+                  };
+                  messages.push(currentStreamingMessage);
+                  renderAll(true);
+                  setBusy(true);
 
-                vscode.postMessage({ command: 'permissionResponse', choice: 'session' });
-              });
-              actionBar.appendChild(sessionBtn);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'session' });
+                });
+                actionBar.appendChild(sessionBtn);
 
-              const noBtn = document.createElement('button');
-              noBtn.className = 'perm-btn perm-btn-cancel';
-              noBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              noBtn.textContent = '✕ No';
-              noBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                noBtn.disabled = true;
-                if (yesBtn) yesBtn.disabled = true;
-                if (sessionBtn) sessionBtn.disabled = true;
-                setBusy(false);
-                vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
-              });
-              actionBar.appendChild(noBtn);
+                const noBtn = document.createElement('button');
+                noBtn.className = 'perm-btn perm-btn-cancel';
+                noBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                noBtn.textContent = '✕ No';
+                noBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  noBtn.disabled = true;
+                  if (yesBtn) yesBtn.disabled = true;
+                  if (sessionBtn) sessionBtn.disabled = true;
+                  setBusy(false);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
+                });
+                actionBar.appendChild(noBtn);
 
-              const copyBtn = document.createElement('button');
-              copyBtn.className = 'perm-btn perm-btn-secondary';
-              copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              copyBtn.textContent = '📋 Copy Command';
-              copyBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                copyTextToClipboard(cmd, copyBtn);
-              });
-              actionBar.appendChild(copyBtn);
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'perm-btn perm-btn-secondary';
+                copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                copyBtn.textContent = '📋 Copy Command';
+                copyBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  copyTextToClipboard(cmd, copyBtn);
+                });
+                actionBar.appendChild(copyBtn);
+              }
+
+              resultBlock.appendChild(actionBar);
             }
 
-            resultBlock.appendChild(actionBar);
+            bodyInner.appendChild(resultBlock);
           }
-
-          bodyInner.appendChild(resultBlock);
         }
 
         if (!hasContent) {
@@ -948,6 +955,8 @@ function renderAll(autoScrollForce: boolean = false) {
           tc.expanded = !tc.expanded;
           hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
           body.classList.toggle('open', tc.expanded);
+          header.classList.toggle('open', tc.expanded);
+          accordion.classList.toggle('open', tc.expanded);
           if (tc.expanded) {
             setTimeout(() => {
               accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1130,86 +1139,116 @@ function esc(s: string): string {
 }
 
 function isDiffText(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
   const lines = text.split('\n');
-  let hasAdd = false;
-  let hasDel = false;
-  let hasHdr = false;
 
   for (const line of lines) {
-    if (line.startsWith('diff --git') || line.startsWith('index ') || (line.startsWith('--- ') && lines.some(l => l.startsWith('+++ ')))) {
-      hasHdr = true;
-    }
-    if (/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line)) {
-      hasHdr = true;
-    }
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      hasAdd = true;
-    }
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      hasDel = true;
+    if (
+      line.startsWith('diff --git') ||
+      line.startsWith('index ') ||
+      (line.startsWith('--- ') && lines.some(l => l.startsWith('+++ '))) ||
+      /^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line) ||
+      line.startsWith('@@ ')
+    ) {
+      return true;
     }
   }
 
-  return hasHdr || (hasAdd && hasDel) || (hasAdd && lines.length <= 15) || (hasDel && lines.length <= 15);
+  return false;
 }
 
-function buildDiffFromToolArgs(toolName: string, rawArgs: any): string | null {
-  if (!rawArgs) return null;
+function extractTargetFile(toolName: string, rawArgs: any, rawResult?: any): string | undefined {
   let args = rawArgs;
   if (typeof args === 'string') {
     try { args = JSON.parse(args); } catch {}
   }
-  if (typeof args !== 'object' || !args) return null;
+  if (typeof args === 'object' && args) {
+    const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file;
+    if (file && typeof file === 'string') return file;
+  }
+  if (rawResult && typeof rawResult === 'string') {
+    const match = rawResult.match(/(?:to|file):\s*([^\s\n\.\,\:]+\.[a-zA-Z0-9]+)/i) || rawResult.match(/(?:\-\-\-\s*a\/|\+\+\+\s*b\/)([^\s\n]+)/);
+    if (match && match[1]) return match[1];
+  }
+  return undefined;
+}
 
-  const name = toolName.toLowerCase();
+function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any): string | null {
+  const name = (toolName || '').toLowerCase();
   const normName = name.replace(/[-_]/g, '');
-  const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
-  const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
 
-  let diffLines: string[] = [];
+  let args = rawArgs;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch {}
+  }
 
-  if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
-    const target = args.TargetContent || args.targetContent || args.target_content || '';
-    const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
-    if (target || replacement) {
-      diffLines.push(`--- a/${fileName}`);
-      diffLines.push(`+++ b/${fileName}`);
-      diffLines.push(`@@ edit @@`);
-      if (target) {
-        String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
-      }
-      if (replacement) {
-        String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
-      }
+  // 1. Try extracting diff from rawResult if present (e.g. agy tool output containing [diff_block_start]...[diff_block_end])
+  if (rawResult && typeof rawResult === 'string') {
+    const diffBlockMatch = rawResult.match(/\[diff_block_start\]([\s\S]*?)\[diff_block_end\]/);
+    if (diffBlockMatch && diffBlockMatch[1].trim()) {
+      return diffBlockMatch[1].trim();
     }
-  } else if (normName.includes('multireplacefilecontent')) {
-    const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
-    if (Array.isArray(chunks) && chunks.length > 0) {
-      diffLines.push(`--- a/${fileName}`);
-      diffLines.push(`+++ b/${fileName}`);
-      chunks.forEach((chunk: any, idx: number) => {
-        diffLines.push(`@@ chunk ${idx + 1} @@`);
-        const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
-        const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
+  }
+
+  // 2. Build diff from args if present
+  if (typeof args === 'object' && args) {
+    const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
+    const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
+
+    let diffLines: string[] = [];
+
+    if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
+      const target = args.TargetContent || args.targetContent || args.target_content || '';
+      const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
+      if (target || replacement) {
+        diffLines.push(`--- a/${fileName}`);
+        diffLines.push(`+++ b/${fileName}`);
+        diffLines.push(`@@ edit @@`);
         if (target) {
           String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
         }
         if (replacement) {
           String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
         }
-      });
+      }
+    } else if (normName.includes('multireplacefilecontent')) {
+      const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
+      if (Array.isArray(chunks) && chunks.length > 0) {
+        diffLines.push(`--- a/${fileName}`);
+        diffLines.push(`+++ b/${fileName}`);
+        chunks.forEach((chunk: any, idx: number) => {
+          diffLines.push(`@@ chunk ${idx + 1} @@`);
+          const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
+          const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
+          if (target) {
+            String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+          }
+          if (replacement) {
+            String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+          }
+        });
+      }
+    } else if (normName.includes('writetofile') || normName.includes('writefile')) {
+      const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
+      if (code) {
+        diffLines.push(`--- /dev/null`);
+        diffLines.push(`+++ b/${fileName}`);
+        diffLines.push(`@@ new file @@`);
+        String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+      }
     }
-  } else if (normName.includes('writetofile') || normName.includes('writefile')) {
-    const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
-    if (code) {
-      diffLines.push(`--- /dev/null`);
-      diffLines.push(`+++ b/${fileName}`);
-      diffLines.push(`@@ new file @@`);
-      String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+
+    if (diffLines.length > 0) {
+      return diffLines.join('\n');
     }
   }
 
-  return diffLines.length > 0 ? diffLines.join('\n') : null;
+  // 3. Fallback to rawResult diff if it contains unified diff format
+  if (rawResult && typeof rawResult === 'string' && isDiffText(rawResult)) {
+    return rawResult.trim();
+  }
+
+  return null;
 }
 
 function renderDiffOrTextHtml(text: string): string {
