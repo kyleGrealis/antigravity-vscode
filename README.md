@@ -67,9 +67,9 @@ This extension contributes the following settings (`antigravity.*`):
 ## TODO / Roadmap
 
 - [ ] **Plan Mode**: Dedicated step-by-step planning interface, interactive plan checklists, and plan review/approval workflows prior to code execution.
-- [ ] **Session History Selector**: Quick picker and search interface for browsing, loading, and restoring past chat sessions across editor reloads.
+- [ ] **Session History Selector** *(Work in Progress)*: Quick picker dropdown for browsing and switching past conversation contexts.
+- [x] **Granular Permission Controls**: Interactive permission prompt cards with single-turn, session auto-approve, and decline options.
 - [ ] **Agent Workflow Visualizations**: Specialized UI components for monitoring subagent teams, background tasks, timer schedules, and structured tool outputs.
-- [ ] **Granular Permission Controls**: Enhanced permission request modals with fine-grained per-tool auto-approval settings.
 
 ---
 
