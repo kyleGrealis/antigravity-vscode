@@ -21,6 +21,11 @@ Instructions and conventions for maintaining the `antigravity-vscode` extension.
 - **Compile Code**: Run `npm run build` to generate `dist/extension.js` and `dist/webview.js`.
 - **Package VSIX**: Run `npx vsce package` to create `antigravity-vscode-<version>.vsix`.
 - **Install Extension for Testing**:
-  - VS Code: `code --install-extension antigravity-vscode-<version>.vsix --force`
-  - Positron: `positron --install-extension antigravity-vscode-<version>.vsix --force`
+  - Standard VS Code: `code --install-extension antigravity-vscode-<version>.vsix --force`
+  - Positron (NixOS Workaround): The `positron-bin` Nix wrapper rejects CLI flags like `--install-extension`. Instead, sync built outputs directly into the extension directory:
+    ```bash
+    rsync -av dist/ ~/.positron/extensions/antigravity.antigravity-vscode-<version>/dist/
+    rsync -av media/ ~/.positron/extensions/antigravity.antigravity-vscode-<version>/media/
+    ```
 - **Verification**: Verify changes using `git status` and `git diff`.
+

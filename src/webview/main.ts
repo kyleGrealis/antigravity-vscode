@@ -93,6 +93,9 @@ let attachedImages: string[] = [];
 
 const log = document.getElementById('chat-messages') as HTMLElement;
 const input = document.getElementById('prompt-input') as HTMLTextAreaElement;
+window.addEventListener('focus', () => {
+  input?.focus();
+});
 const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
 const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
 const newChatBtn = document.getElementById('new-chat-btn') as HTMLButtonElement;
@@ -1300,6 +1303,9 @@ window.addEventListener('message', (event) => {
   const data = event.data;
 
   switch (data.type) {
+    case 'focusInput':
+      input?.focus();
+      break;
     case 'permissionRequest':
       setBusy(false);
       renderPermissionPromptCard(data.promptText);

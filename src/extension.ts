@@ -49,7 +49,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('antigravity-vscode.focus', () => {
-      webviewProvider.createOrShowPanel();
+      if (webviewProvider.view) {
+        webviewProvider.view.show?.(true);
+        webviewProvider.view.webview.postMessage({ type: 'focusInput' });
+      } else {
+        vscode.commands.executeCommand('antigravityVSCodeSidebar.focus');
+      }
     })
   );
 
