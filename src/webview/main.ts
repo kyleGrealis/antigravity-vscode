@@ -188,6 +188,22 @@ input?.addEventListener('input', () => {
 });
 
 input?.addEventListener('keydown', (e) => {
+  if (e.key === '`') {
+    const start = input.selectionStart;
+    const val = input.value;
+    if (start >= 2 && val.slice(start - 2, start) === '``') {
+      e.preventDefault();
+      const before = val.slice(0, start - 2);
+      const after = val.slice(start);
+      const prefix = (before && !before.endsWith('\n')) ? '\n```' : '```';
+      const suffix = (after && !after.startsWith('\n')) ? '\n```' : '```';
+      input.value = `${before}${prefix}\n\n${suffix}${after}`;
+      const cursorPos = (before + prefix + '\n').length;
+      input.selectionStart = input.selectionEnd = cursorPos;
+      adjustInputHeight();
+      return;
+    }
+  }
   if (isAtMenuVisible()) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -277,9 +293,30 @@ input?.addEventListener('keydown', (e) => {
     }
   }
 
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendPrompt();
+  if (e.key === 'Enter') {
+    if (e.shiftKey) {
+      const val = input.value;
+      const cursorPos = input.selectionStart;
+      const lineEndPos = val.indexOf('\n', cursorPos);
+      const currentLine = val.substring(
+        val.lastIndexOf('\n', cursorPos - 1) + 1,
+        lineEndPos === -1 ? val.length : lineEndPos
+      );
+      if (currentLine.trim().startsWith('```') && cursorPos >= val.lastIndexOf('```')) {
+        e.preventDefault();
+        if (lineEndPos === -1) {
+          input.value = val + '\n';
+          input.selectionStart = input.selectionEnd = input.value.length;
+        } else {
+          input.selectionStart = input.selectionEnd = lineEndPos + 1;
+        }
+        adjustInputHeight();
+        return;
+      }
+    } else {
+      e.preventDefault();
+      sendPrompt();
+    }
   }
 });
 
@@ -941,6 +978,7 @@ function renderAll(autoScrollForce: boolean = false) {
 
   for (const msg of messages) {
     const isEmptyAssistantMsg = msg.role === 'assistant' &&
+                                !msg.isStreaming &&
                                 !msg.text &&
                                 !msg.thinking &&
                                 (!msg.toolCalls || msg.toolCalls.length === 0) &&
@@ -1267,8 +1305,10 @@ function renderAll(autoScrollForce: boolean = false) {
         body.classList.add('streaming-cursor');
       }
     } else if (msg.role === 'assistant' && msg.isStreaming && !msg.text && (!msg.toolCalls || msg.toolCalls.length === 0) && (!msg.thinking || !msg.thinking.trim())) {
-      const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'antigravity is thinking...';
+      const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'Processing request...';
       body.innerHTML = `<div class="thinking-pulse"><span class="thinking-pulse-dot"></span><span>${pulseText}</span></div>`;
+    } else if (msg.role === 'user' && msg.text) {
+      body.innerHTML = marked.parse(msg.text) as string;
     } else {
       body.textContent = msg.text || '';
     }

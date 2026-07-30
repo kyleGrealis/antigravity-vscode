@@ -70,8 +70,10 @@ This extension contributes the following settings (`antigravity.*`):
 
 ## TODO / Roadmap
 
-- [ ] **Interactive Clarification Dialogs**: In Plan Mode, ensure process pauses to present structured multiple-choice questions with recommended options, option letters, and custom write-in input.
+- [ ] **Interactive Clarification Dialogs**: Present structured multiple-choice questions in Plan Mode with recommended options, letter shortcuts, and write-in input fields.
 - [ ] **Agent Workflow Visualizations**: Specialized UI components for monitoring subagent teams, background tasks, timer schedules, and structured tool outputs.
+- [ ] **Authentication & First-Time Onboarding**: Implement CLI authentication status checks for new users without active credentials, presenting a dedicated onboarding state with guided sign-in instructions.
+- [ ] **Granular & Per-Session Settings**: Expand settings management for model selection, reasoning effort, permission auto-approvals, and sandboxing with per-session overrides that respect global defaults safely.
 
 ---
 
