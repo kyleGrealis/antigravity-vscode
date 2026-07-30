@@ -9,6 +9,7 @@ Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and 
 
 ## Features
 
+- **Interactive Plan Mode**: Dedicated step-by-step planning interface, interactive plan checklists, inline plan review & modification form, and interactive clarification cards.
 - **Rich Webview Chat Interface**: Clean, responsive agent chat interface in the side bar or editor grid.
 - **Empty State Welcome Screen**: Centered glowing SVG vector hero logo, tagline, and interactive 2x2 prompt suggestion cards grid.
 - **Session History & Renaming**: Dropdown history picker with real-time search filtering, inline session title editing, and automatic session state restoration on reload.
@@ -69,9 +70,7 @@ This extension contributes the following settings (`antigravity.*`):
 
 ## TODO / Roadmap
 
-- [ ] **Plan Mode**: Dedicated step-by-step planning interface, interactive plan checklists, and plan review/approval workflows prior to code execution.
-- [x] **Session History Selector**: Quick picker dropdown with search filtering, inline title renaming, and automatic state restoration across reloads.
-- [x] **Granular Permission Controls**: Interactive permission prompt cards with single-turn, session auto-approve, and decline options.
+- [ ] **Interactive Clarification Dialogs**: In Plan Mode, ensure process pauses to present structured multiple-choice questions with recommended options, option letters, and custom write-in input.
 - [ ] **Agent Workflow Visualizations**: Specialized UI components for monitoring subagent teams, background tasks, timer schedules, and structured tool outputs.
 
 ---

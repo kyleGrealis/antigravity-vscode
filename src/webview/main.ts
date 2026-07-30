@@ -27,6 +27,9 @@ interface Message {
   };
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
+  plan?: any;
+  clarification?: any;
+  isPlanMode?: boolean;
 }
 
 interface SlashOption {
@@ -109,6 +112,16 @@ const contextBar = document.getElementById('context-bar') as HTMLElement;
 const slashMenu = document.getElementById('slash-menu') as HTMLElement;
 const atMenu = document.getElementById('at-menu') as HTMLElement;
 
+let promptHistory: string[] = [];
+try {
+  const saved = localStorage.getItem('antigravity_prompt_history');
+  if (saved) {
+    promptHistory = JSON.parse(saved);
+  }
+} catch (e) {}
+let historyIndex: number = promptHistory.length;
+let currentDraft: string = '';
+
 let atMenuIndex = 0;
 let atFilteredFiles: string[] = [];
 let atDebounceTimer: any = null;
@@ -161,9 +174,15 @@ input?.addEventListener('drop', (e: DragEvent) => {
   }
 });
 
+function adjustInputHeight() {
+  if (input) {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  }
+}
+
 input?.addEventListener('input', () => {
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  adjustInputHeight();
   updateSlashMenu();
   updateAtMenu();
 });
@@ -216,6 +235,45 @@ input?.addEventListener('keydown', (e) => {
       e.preventDefault();
       hideSlashMenu();
       return;
+    }
+  }
+
+  if (e.key === 'ArrowUp') {
+    if (!isAtMenuVisible() && !isSlashMenuVisible() && promptHistory.length > 0) {
+      const isCursorAtStart = input.selectionStart === 0 && input.selectionEnd === 0;
+      if (input.value.trim() === '' || isCursorAtStart) {
+        if (historyIndex === -1 || historyIndex === promptHistory.length) {
+          currentDraft = input.value;
+        }
+        if (historyIndex > 0) {
+          historyIndex--;
+          input.value = promptHistory[historyIndex];
+          e.preventDefault();
+          const len = input.value.length;
+          input.setSelectionRange(len, len);
+          return;
+        }
+      }
+    }
+  }
+
+  if (e.key === 'ArrowDown') {
+    if (!isAtMenuVisible() && !isSlashMenuVisible() && historyIndex >= 0) {
+      if (historyIndex < promptHistory.length - 1) {
+        historyIndex++;
+        input.value = promptHistory[historyIndex];
+        e.preventDefault();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+        return;
+      } else if (historyIndex === promptHistory.length - 1) {
+        historyIndex = promptHistory.length;
+        input.value = currentDraft;
+        e.preventDefault();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+        return;
+      }
     }
   }
 
@@ -386,22 +444,14 @@ function acceptSlashItem() {
   const item = slashFiltered[slashMenuIndex];
   if (!item) return;
   if (item.insertValue) {
-    input.value = '';
-    hideSlashMenu();
-    const match = item.insertValue.match(/^\/(\S+)\s*(.*)?$/);
-    if (match) {
-      executeSlashCommand(match[1], match[2] || undefined);
-    }
-  } else if (item.hasArg) {
-    input.value = `/${item.name} `;
-    hideSlashMenu();
-    updateSlashMenu();
-    input.focus();
+    input.value = item.insertValue + (item.insertValue.endsWith(' ') ? '' : ' ');
   } else {
-    input.value = '';
-    hideSlashMenu();
-    executeSlashCommand(item.name);
+    input.value = `/${item.name} `;
   }
+  hideSlashMenu();
+  input.focus();
+  const len = input.value.length;
+  input.setSelectionRange(len, len);
 }
 
 function hideSlashMenu() {
@@ -497,15 +547,32 @@ function acceptAtItem() {
 }
 
 function executeSlashCommand(name: string, arg?: string) {
-  if (name === 'clear') {
+  if (name === 'clear' || name === 'new') {
     messages = [];
     currentStreamingMessage = null;
     renderAll();
   }
-  if (name === 'new') {
-    messages = [];
-    currentStreamingMessage = null;
-    renderAll();
+  if (name === 'plan') {
+    const userText = `/plan ${arg || ''}`.trim();
+    messages.push({
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text: userText,
+    });
+    currentStreamingMessage = {
+      id: `a-${Date.now()}`,
+      role: 'assistant',
+      text: 'Analyzing workspace and generating implementation plan...',
+      thinking: '',
+      isPlanMode: true,
+      toolCalls: [],
+      isStreaming: true,
+    };
+    if (currentStreamingMessage) {
+      messages.push(currentStreamingMessage);
+    }
+    renderAll(true);
+    setBusy(true);
   }
   vscode.postMessage({ command: 'slashCommand', name, arg });
 }
@@ -513,6 +580,17 @@ function executeSlashCommand(name: string, arg?: string) {
 function sendPrompt() {
   const text = input.value.trim();
   if (!text && attachedImages.length === 0) return;
+
+  if (text) {
+    if (promptHistory.length === 0 || promptHistory[promptHistory.length - 1] !== text) {
+      promptHistory.push(text);
+      try {
+        localStorage.setItem('antigravity_prompt_history', JSON.stringify(promptHistory));
+      } catch (e) {}
+    }
+    historyIndex = promptHistory.length;
+    currentDraft = '';
+  }
 
   hideSlashMenu();
 
@@ -806,7 +884,45 @@ function renderAll(autoScrollForce: boolean = false) {
 
   log.innerHTML = '';
 
+  const isPlanModeActive = (currentStreamingMessage && (currentStreamingMessage as any).isPlanMode) ||
+                           messages.some(m => m.plan && !(m.plan as any).cancelled && m.plan.steps.filter((s: any) => s.completed).length < m.plan.steps.length);
+  const inputRow = document.querySelector('.input-row') as HTMLElement;
+  const contextBar = document.querySelector('.context-bar') as HTMLElement;
+  const imageBarEl = document.querySelector('.image-bar') as HTMLElement;
+  if (inputRow) inputRow.style.display = isPlanModeActive ? 'none' : '';
+  if (contextBar) contextBar.style.display = isPlanModeActive ? 'none' : '';
+  if (imageBarEl && attachedImages.length > 0) imageBarEl.style.display = isPlanModeActive ? 'none' : 'flex';
+
+  let activeExecutingPlanMsg: Message | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].plan) {
+      const p = messages[i].plan;
+      const done = p.steps.filter((s: any) => s.completed).length;
+      if (!p.cancelled && (p as any).isApproved && done < p.steps.length) {
+        activeExecutingPlanMsg = messages[i];
+        break;
+      }
+    }
+  }
+
+  if (activeExecutingPlanMsg && activeExecutingPlanMsg.plan) {
+    const pinnedHeader = document.createElement('div');
+    pinnedHeader.className = 'pinned-plan-header';
+    pinnedHeader.appendChild(renderPlanCard(activeExecutingPlanMsg.plan));
+    log.appendChild(pinnedHeader);
+  }
+
   for (const msg of messages) {
+    const isEmptyAssistantMsg = msg.role === 'assistant' &&
+                                !msg.text &&
+                                !msg.thinking &&
+                                (!msg.toolCalls || msg.toolCalls.length === 0) &&
+                                !msg.plan &&
+                                !msg.clarification;
+    if (isEmptyAssistantMsg) {
+      continue;
+    }
+
     const el = document.createElement('div');
     el.className = `msg msg-${msg.role}`;
 
@@ -1103,6 +1219,14 @@ function renderAll(autoScrollForce: boolean = false) {
       el.appendChild(toolSection);
     }
 
+    if (msg.plan && msg !== activeExecutingPlanMsg) {
+      el.appendChild(renderPlanCard(msg.plan));
+    }
+
+    if (msg.clarification) {
+      el.appendChild(renderClarificationCard(msg.clarification));
+    }
+
     const body = document.createElement('div');
     body.className = 'msg-body';
     if (msg.role === 'assistant' && msg.text) {
@@ -1111,10 +1235,15 @@ function renderAll(autoScrollForce: boolean = false) {
       if (msg.isStreaming) {
         body.classList.add('streaming-cursor');
       }
+    } else if (msg.role === 'assistant' && msg.isStreaming && !msg.text && (!msg.toolCalls || msg.toolCalls.length === 0) && (!msg.thinking || !msg.thinking.trim())) {
+      const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'antigravity is thinking...';
+      body.innerHTML = `<div class="thinking-pulse"><span class="thinking-pulse-dot"></span><span>${pulseText}</span></div>`;
     } else {
-      body.textContent = msg.text;
+      body.textContent = msg.text || '';
     }
-    el.appendChild(body);
+    if (body.innerHTML.trim() || body.textContent?.trim()) {
+      el.appendChild(body);
+    }
 
     if (msg.tokens && (msg.tokens.input_tokens || msg.tokens.output_tokens)) {
       const usage = document.createElement('div');
@@ -1510,9 +1639,11 @@ window.addEventListener('message', (event) => {
           ? currentStreamingMessage.toolCalls.find(tc => tc.id === data.id)
           : null;
 
-        if (!existing && data.name && !isGenericName) {
+        if (!existing && data.name && !isGenericName && data.args) {
           existing = currentStreamingMessage.toolCalls.find(
-            tc => tc.name.toLowerCase() === data.name.toLowerCase() && (tc.status === 'running' || !tc.result || !tc.args)
+            tc => tc.name.toLowerCase() === data.name.toLowerCase() &&
+                  tc.status === 'running' &&
+                  JSON.stringify(tc.args) === JSON.stringify(data.args)
           ) || null;
         }
 
@@ -1606,6 +1737,34 @@ window.addEventListener('message', (event) => {
       break;
     }
 
+    case 'planCreated': {
+      if (data.plan) {
+        const targetPath = (data.plan.filePath || '').toLowerCase().replace(/\\/g, '/');
+        for (const m of messages) {
+          if (m.plan) {
+            const mPath = (m.plan.filePath || '').toLowerCase().replace(/\\/g, '/');
+            if (mPath === targetPath || mPath.endsWith(targetPath) || targetPath.endsWith(mPath) || (!m.plan.isApproved && !(m.plan as any).cancelled)) {
+              delete m.plan;
+            }
+          }
+        }
+        if (currentStreamingMessage) {
+          currentStreamingMessage.plan = data.plan;
+        } else {
+          const planMsg: Message = {
+            id: `plan-${Date.now()}`,
+            role: 'assistant',
+            text: '',
+            thinking: '',
+            plan: data.plan,
+          };
+          messages.push(planMsg);
+        }
+        renderAll(true);
+      }
+      break;
+    }
+
     case 'activeFile':
       if (fileChip && contextBar) {
         if (data.filePath) {
@@ -1618,13 +1777,28 @@ window.addEventListener('message', (event) => {
       break;
 
     case 'cancelled':
+      setBusy(false);
+      if (currentStreamingMessage) {
+        currentStreamingMessage.isStreaming = false;
+        if (!currentStreamingMessage.text) {
+          currentStreamingMessage.text = '[cancelled]';
+        }
+      }
+      currentStreamingMessage = null;
+      for (const m of messages) {
+        if (m.plan) {
+          (m.plan as any).cancelled = true;
+        }
+      }
+      const inputAreaEl = document.querySelector('.input-area') as HTMLElement;
+      if (inputAreaEl) inputAreaEl.style.display = '';
+      renderAll();
+      break;
+
     case 'processExit':
       setBusy(false);
       if (currentStreamingMessage) {
         currentStreamingMessage.isStreaming = false;
-        if (data.type === 'cancelled' && !currentStreamingMessage.text) {
-          currentStreamingMessage.text = '[cancelled]';
-        }
       }
       currentStreamingMessage = null;
       renderAll();
@@ -1903,4 +2077,341 @@ function renderFilteredSessions(sessions: Array<{ id: string; title: string; upd
 
 if (messages.length > 0) {
   renderAll();
+}
+
+function renderPlanCard(plan: { filePath: string; timestamp: string; title: string; steps: Array<{ id: string; text: string; completed: boolean }> }): HTMLElement {
+  const isCancelled = !!(plan as any).cancelled;
+  if (isCancelled) {
+    const card = document.createElement('div');
+    card.className = 'plan-card cancelled';
+    card.innerHTML = `
+      <div class="plan-header">
+        <div class="plan-title-group">
+          <span class="plan-badge cancelled">❌ Plan Cancelled</span>
+          <span class="plan-title">${esc(plan.title || 'Plan')}</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+        This implementation plan was cancelled.
+      </div>
+    `;
+    return card;
+  }
+
+  const completedCount = plan.steps.filter(s => s.completed).length;
+  const totalCount = plan.steps.length;
+  const pct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const isCompleted = totalCount > 0 && completedCount === totalCount;
+
+  const card = document.createElement('div');
+  card.className = `plan-card${isCompleted ? ' completed' : ' sticky'}`;
+
+  const header = document.createElement('div');
+  header.className = 'plan-header';
+
+  const titleGroup = document.createElement('div');
+  titleGroup.className = 'plan-title-group';
+
+  const badge = document.createElement('span');
+  badge.className = `plan-badge${isCompleted ? ' completed' : ''}`;
+  badge.textContent = isCompleted ? '✓ Plan Complete' : 'Plan';
+  titleGroup.appendChild(badge);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'plan-title';
+  titleEl.textContent = plan.title || 'Implementation Plan';
+  titleGroup.appendChild(titleEl);
+
+  header.appendChild(titleGroup);
+
+  const openBtn = document.createElement('button');
+  openBtn.className = 'plan-open-btn';
+  openBtn.innerHTML = '📄 Open in Editor ↗';
+  openBtn.onclick = (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ command: 'openPlanFile', filePath: plan.filePath });
+  };
+  header.appendChild(openBtn);
+  card.appendChild(header);
+
+  const progressContainer = document.createElement('div');
+  progressContainer.className = 'plan-progress-container';
+  progressContainer.innerHTML = `
+    <div class="plan-progress-bar-bg">
+      <div class="plan-progress-bar-fill" style="width: ${pct}%;"></div>
+    </div>
+    <div class="plan-progress-text">
+      <span>${completedCount} of ${totalCount} tasks completed</span>
+      <span>${pct}%</span>
+    </div>
+  `;
+  card.appendChild(progressContainer);
+
+  const checklist = document.createElement('div');
+  checklist.className = 'plan-checklist';
+
+  plan.steps.forEach((step, idx) => {
+    const item = document.createElement('div');
+    item.className = `plan-step-item${step.completed ? ' completed' : ''}`;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'plan-step-checkbox';
+    cb.checked = step.completed;
+    cb.disabled = true;
+
+    const label = document.createElement('span');
+    label.className = 'plan-step-text';
+    label.textContent = step.text;
+
+    item.appendChild(cb);
+    item.appendChild(label);
+    checklist.appendChild(item);
+  });
+
+  card.appendChild(checklist);
+
+  const isApproved = !!(plan as any).isApproved;
+  if (!isApproved && !isCancelled && !isCompleted && completedCount === 0) {
+    const actions = document.createElement('div');
+    actions.className = 'plan-actions';
+
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'plan-btn plan-btn-primary';
+    approveBtn.textContent = '✓ Approve & Execute Plan';
+    approveBtn.onclick = (e) => {
+      e.stopPropagation();
+      (plan as any).isApproved = true;
+      actions.remove();
+
+      const displayUserText = `Proceeding with implementation plan (${plan.title || 'Plan'}).`;
+      const fullSystemPrompt = `[EXECUTE PLAN] Read the implementation plan at "${plan.filePath}" and immediately execute every task step-by-step using your file writing and command tools. As you complete each task, update the checklist in "${plan.filePath}" by marking '[x]'.`;
+
+      currentStreamingMessage = {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        text: '',
+        thinking: '',
+        toolCalls: [],
+        isStreaming: true,
+      };
+      messages.push({
+        id: `u-${Date.now()}`,
+        role: 'user',
+        text: displayUserText,
+      });
+      messages.push(currentStreamingMessage);
+      renderAll(true);
+      setBusy(true);
+
+      vscode.postMessage({ command: 'userPrompt', promptText: fullSystemPrompt, images: [] });
+    };
+    actions.appendChild(approveBtn);
+
+    const modifyBtn = document.createElement('button');
+    modifyBtn.className = 'plan-btn plan-btn-secondary';
+    modifyBtn.textContent = '✏️ Modify Plan';
+    modifyBtn.onclick = (e) => {
+      e.stopPropagation();
+      actions.style.display = 'none';
+
+      const modifyForm = document.createElement('div');
+      modifyForm.className = 'plan-modify-form';
+
+      const modifyInput = document.createElement('textarea');
+      modifyInput.className = 'plan-modify-input';
+      modifyInput.rows = 2;
+      modifyInput.value = '';
+      modifyInput.placeholder = 'Describe edits to the plan... (e.g. add new feature, update layout)';
+
+      const modifyActions = document.createElement('div');
+      modifyActions.className = 'plan-modify-actions';
+
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'plan-btn plan-btn-primary';
+      submitBtn.textContent = '🚀 Submit Edits';
+
+      const cancelFormBtn = document.createElement('button');
+      cancelFormBtn.className = 'plan-btn plan-btn-secondary';
+      cancelFormBtn.textContent = 'Cancel';
+
+      const submitEdit = () => {
+        const rawText = modifyInput.value.trim();
+        if (!rawText) return;
+        modifyForm.remove();
+        
+        const text = rawText.startsWith('Edits to the plan:') ? rawText : `Edits to the plan: ${rawText}`;
+
+        messages.push({
+          id: `u-${Date.now()}`,
+          role: 'user',
+          text,
+        });
+
+        currentStreamingMessage = {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          text: 'Updating implementation plan...',
+          thinking: '',
+          isPlanMode: true,
+          toolCalls: [],
+          isStreaming: true,
+        };
+        messages.push(currentStreamingMessage);
+        renderAll(true);
+        setBusy(true);
+
+        vscode.postMessage({ command: 'userPrompt', promptText: text, images: [] });
+      };
+
+      submitBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        submitEdit();
+      };
+
+      cancelFormBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        modifyForm.remove();
+        actions.style.display = 'flex';
+      };
+
+      modifyInput.onkeydown = (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          submitEdit();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          modifyForm.remove();
+          actions.style.display = 'flex';
+        }
+      };
+
+      modifyActions.appendChild(submitBtn);
+      modifyActions.appendChild(cancelFormBtn);
+      modifyForm.appendChild(modifyInput);
+      modifyForm.appendChild(modifyActions);
+
+      card.appendChild(modifyForm);
+
+      setTimeout(() => {
+        modifyInput.focus();
+        const len = modifyInput.value.length;
+        modifyInput.setSelectionRange(len, len);
+        modifyForm.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, 50);
+    };
+    actions.appendChild(modifyBtn);
+
+    const cancelPlanBtn = document.createElement('button');
+    cancelPlanBtn.className = 'plan-btn plan-btn-secondary';
+    cancelPlanBtn.textContent = '❌ Cancel Plan';
+    cancelPlanBtn.onclick = (e) => {
+      e.stopPropagation();
+      (plan as any).cancelled = true;
+      actions.remove();
+      const inputArea = document.querySelector('.input-area') as HTMLElement;
+      if (inputArea) inputArea.style.display = '';
+      vscode.postMessage({ command: 'cancel' });
+      setBusy(false);
+      renderAll();
+    };
+    actions.appendChild(cancelPlanBtn);
+    card.appendChild(actions);
+  }
+
+  if (isApproved && !isCompleted) {
+    const execBar = document.createElement('div');
+    execBar.className = 'plan-exec-bar';
+    execBar.innerHTML = `<span class="plan-exec-status">⚡ Executing Plan Step-by-Step...</span>`;
+    
+    const cancelExecBtn = document.createElement('button');
+    cancelExecBtn.className = 'plan-btn plan-btn-secondary plan-btn-cancel-exec';
+    cancelExecBtn.textContent = '❌ Cancel Execution';
+    cancelExecBtn.onclick = (e) => {
+      e.stopPropagation();
+      (plan as any).cancelled = true;
+      vscode.postMessage({ command: 'cancel' });
+      setBusy(false);
+      renderAll();
+    };
+    execBar.appendChild(cancelExecBtn);
+    card.appendChild(execBar);
+  }
+
+  return card;
+}
+
+function renderClarificationCard(q: { question: string; options?: string[]; isMultiSelect?: boolean }): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'clarification-card';
+
+  const title = document.createElement('div');
+  title.className = 'clarification-title';
+  title.innerHTML = `<span>❓ Clarification Required:</span> ${esc(q.question)}`;
+  card.appendChild(title);
+
+  const optionsContainer = document.createElement('div');
+  optionsContainer.className = 'clarification-options';
+
+  const inputType = q.isMultiSelect ? 'checkbox' : 'radio';
+  const groupName = `clarification_${Date.now()}`;
+
+  if (q.options && q.options.length > 0) {
+    q.options.forEach((optText) => {
+      const label = document.createElement('label');
+      label.className = 'clarification-option-label';
+
+      const optInput = document.createElement('input');
+      optInput.type = inputType;
+      optInput.name = groupName;
+      optInput.value = optText;
+
+      const txt = document.createElement('span');
+      txt.textContent = optText;
+
+      label.appendChild(optInput);
+      label.appendChild(txt);
+      optionsContainer.appendChild(label);
+    });
+  }
+
+  card.appendChild(optionsContainer);
+
+  const customInput = document.createElement('input');
+  customInput.type = 'text';
+  customInput.className = 'clarification-input';
+  customInput.placeholder = 'Or type custom guidance / additional instructions...';
+  card.appendChild(customInput);
+
+  const actions = document.createElement('div');
+  actions.className = 'plan-actions';
+
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'plan-btn plan-btn-primary';
+  submitBtn.textContent = 'Submit Response';
+  submitBtn.onclick = (e) => {
+    e.stopPropagation();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitted...';
+
+    const checkedInputs = optionsContainer.querySelectorAll('input:checked');
+    const answers: string[] = [];
+    checkedInputs.forEach((el: any) => answers.push(el.value));
+
+    const customText = customInput.value.trim();
+    if (customText) answers.push(`Custom: ${customText}`);
+
+    const responseMsg = answers.length > 0 ? `Selected choices: ${answers.join(' | ')}` : 'Proceed with default options.';
+
+    if (input) {
+      input.value = responseMsg;
+      const form = input.closest('form') || input.parentElement;
+      if (form) form.dispatchEvent(new Event('submit', { cancelable: true }));
+    }
+  };
+  actions.appendChild(submitBtn);
+
+  card.appendChild(actions);
+
+  return card;
 }

@@ -2,6 +2,7 @@
 
 ## antigravity-vscode 0.1.4
 
+- **Interactive Plan Mode**: Added dedicated step-by-step planning interface with inline review & modification forms, top-pinned execution progress tracking, and interactive clarification cards.
 - **Empty State Welcome Screen**: Added centered glowing SVG vector hero logo and interactive 2x2 prompt suggestion cards grid.
 - **Clean Tool Argument Formatting**: Unescaped quotes/backslashes and replaced raw JSON with formatted command code blocks for tool execution cards.
 - **Transcript History Linking**: Associated transcript step logs back to tool call outputs so past commands render complete output upon reload.

@@ -6,6 +6,7 @@ import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
 import { loadSkills } from './skillManager';
+import { PlanManager } from './planManager';
 
 function formatPermissionError(res: any): any {
   if (typeof res !== 'string') return res;
@@ -66,12 +67,13 @@ function cleanToolArgs(rawArgs: any): Record<string, any> | undefined {
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'antigravityVSCodeSidebar';
-  private view?: vscode.WebviewView;
+  public view?: vscode.WebviewView;
   private currentPanel?: vscode.WebviewPanel;
   private sessionSkipPermissions: boolean = false;
   private sessionAllowedCommands: Set<string> = new Set();
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
+  private readonly planManager: PlanManager = new PlanManager();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -104,6 +106,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         wv.postMessage({ type: 'processExit' })
       );
     });
+
+    this.setupPlanFileWatcher();
   }
 
   public resolveWebviewView(
@@ -224,8 +228,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private setupWebviewMessageListeners(webview: vscode.Webview) {
     webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
+        case 'userPrompt':
         case 'sendPrompt':
-          this.onUserPrompt(message.text, message.images);
+          this.onUserPrompt(message.promptText || message.text, message.images);
           break;
 
         case 'selectImage':
@@ -239,6 +244,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'cancel':
           this.pendingPrompt = null;
           this.processManager.cancelCurrentTask();
+          this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
           break;
 
         case 'permissionResponse':
@@ -367,6 +373,31 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             this.diffController.showDiffFromToolCall(message.targetFile, message.toolName, message.toolArgs);
           }
           break;
+
+        case 'openPlanFile':
+          if (message.filePath) {
+            this.planManager.openPlanInEditor(message.filePath);
+          } else {
+            const cwd = this.resolveWorkingDirectory();
+            const planPath = path.join(cwd, '.antigravity', 'plan.md');
+            this.planManager.openPlanInEditor(planPath);
+          }
+          break;
+
+        case 'createPlan': {
+          const cwd = this.resolveWorkingDirectory();
+          const convId = this.processManager.getConversationId() || '';
+          const planData = this.planManager.createPlan(cwd, convId, message.title || 'Feature Plan', message.steps || []);
+          this.getWebviews().forEach(wv => wv.postMessage({ type: 'planCreated', plan: planData }));
+          break;
+        }
+
+        case 'togglePlanStep': {
+          if (message.filePath && message.stepIndex !== undefined) {
+            this.planManager.updateStepStatus(message.filePath, message.stepIndex, message.completed);
+          }
+          break;
+        }
       }
     });
   }
@@ -487,7 +518,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleSlashCommand(name: string, arg: string | undefined, webview: vscode.Webview) {
-    const uiCommands = ['new', 'clear', 'model', 'effort', 'settings', 'help'];
+    const uiCommands = ['new', 'clear', 'model', 'effort', 'settings', 'help', 'plan'];
     if (!uiCommands.includes(name)) {
       let promptText = '';
       if (name === 'skill') {
@@ -510,6 +541,18 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         this.processManager.newSession();
         webview.postMessage({ type: 'slashResult', name, message: 'New conversation started.' });
         break;
+
+      case 'plan': {
+        const title = arg ? arg.trim() : 'Feature Plan';
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const timestampStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const planFilePath = `.antigravity/plans/PLAN-${timestampStr}.md`;
+
+        const planPrompt = `[PLAN MODE] Analyze the following feature request and create a detailed implementation plan: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed. Then write the implementation plan to "${planFilePath}" formatted with markdown checkboxes '- [ ] task description'.`;
+        this.onUserPrompt(planPrompt, []);
+        break;
+      }
 
       case 'clear':
         this.sessionSkipPermissions = false;
@@ -779,6 +822,52 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         filePath: filePath,
       })
     );
+  }
+
+  private setupPlanFileWatcher() {
+    const watcher = vscode.workspace.createFileSystemWatcher('**/.antigravity/plans/PLAN-*.md');
+    const handlePlanFile = (uri: vscode.Uri) => {
+      try {
+        const filePath = uri.fsPath;
+        if (!fs.existsSync(filePath)) return;
+        const content = fs.readFileSync(filePath, 'utf-8');
+        
+        const lines = content.split('\n');
+        let title = path.basename(filePath);
+        const titleMatch = content.match(/^# (?:Feature Implementation Plan:)?\s*(.+)$/m);
+        if (titleMatch) title = titleMatch[1].trim();
+
+        const steps: Array<{ id: string; text: string; completed: boolean }> = [];
+        lines.forEach((line, idx) => {
+          const match = line.match(/^- \[(x|X| )\]\s*(.+)$/);
+          if (match) {
+            steps.push({
+              id: `step-${idx + 1}`,
+              text: match[2].trim(),
+              completed: match[1].toLowerCase() === 'x',
+            });
+          }
+        });
+
+        if (steps.length > 0) {
+          const planData = {
+            filePath,
+            timestamp: new Date().toISOString(),
+            title,
+            steps,
+          };
+          this.planManager.openPlanInEditor(filePath);
+          this.getWebviews().forEach((wv) =>
+            wv.postMessage({ type: 'planCreated', plan: planData })
+          );
+        }
+      } catch (err) {
+        console.error('Failed to parse created plan file:', err);
+      }
+    };
+
+    watcher.onDidCreate(handlePlanFile);
+    watcher.onDidChange(handlePlanFile);
   }
 
   private async handleSearchFiles(query: string, webview: vscode.Webview) {
