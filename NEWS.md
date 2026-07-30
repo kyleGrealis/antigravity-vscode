@@ -1,5 +1,13 @@
 # News / Release Notes
 
+## antigravity-vscode 0.1.5
+
+- **Execution Mode Selector**: Added `Shift+Tab` keyboard shortcut in prompt input to cycle execution modes (Default, Plan Mode, Auto Accept).
+- **Live Security & Mode Indicators**: Added live prompt footer status text indicating execution mode and environment sandboxing state (`sandbox on`, `sandbox off`, `auto accept`, `plan`).
+- **Slash Command Controls**: Added `/sandbox <on|off>`, `/dangerous <on|off>`, `/help`, `/settings`, and `/plan` slash command toggles.
+- **Persistent Permission Locking**: Permission denial and approval status badges lock in place permanently upon user choice and cancel backend tasks cleanly.
+- **Sandboxing Setting**: Added `antigravity.bypassSandbox` configuration setting for controlling container isolation.
+
 ## antigravity-vscode 0.1.4
 
 - **Interactive Plan Mode**: Added dedicated step-by-step planning interface with inline review & modification forms, top-pinned execution progress tracking, and interactive clarification cards.

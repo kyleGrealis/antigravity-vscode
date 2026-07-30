@@ -108,6 +108,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     });
 
     this.setupPlanFileWatcher();
+
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration('antigravity.dangerouslySkipPermissions') ||
+        e.affectsConfiguration('antigravity.bypassSandbox')
+      ) {
+        this.sendConfigUpdate();
+      }
+    });
   }
 
   public resolveWebviewView(
@@ -124,6 +133,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
     this.setupWebviewMessageListeners(webviewView.webview);
     this.sendSlashCommands(webviewView.webview);
+    this.sendConfigUpdate(webviewView.webview);
   }
 
   public createOrShowPanel(): vscode.WebviewPanel {
@@ -169,6 +179,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'sandbox', description: 'toggle container sandboxing (on/off)', hasArg: true, argHint: '<on|off>' },
+      { name: 'dangerous', description: 'toggle permission auto-approvals (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'settings', description: 'open extension settings' },
       { name: 'help', description: 'show available commands' },
     ];
@@ -201,6 +213,18 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public sendConfigUpdate(targetWebview?: vscode.Webview) {
+    const config = vscode.workspace.getConfiguration('antigravity');
+    const dsp = config.get<boolean>('dangerouslySkipPermissions') === true;
+    const bypassSandbox = config.get<boolean>('bypassSandbox') === true;
+    const msg = { command: 'configUpdate', dangerouslySkipPermissions: dsp, bypassSandbox };
+    if (targetWebview) {
+      targetWebview.postMessage(msg);
+    } else {
+      this.getWebviews().forEach((wv) => wv.postMessage(msg));
+    }
+  }
+
   public sendActiveModel(targetWebview?: vscode.Webview) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const model = config.get<string>('model') || 'gemini-2.5-pro';
@@ -215,7 +239,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       switch (message.command) {
         case 'userPrompt':
         case 'sendPrompt':
-          this.onUserPrompt(message.promptText || message.text, message.images);
+          this.onUserPrompt(message.promptText || message.text, message.images, message.dangerouslySkipPermissions);
           break;
 
         case 'selectImage':
@@ -234,6 +258,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
         case 'permissionResponse':
           this.handlePermissionResponse(message.choice);
+          break;
+
+        case 'ready':
+          this.sendSlashCommands(webview);
+          this.sendConfigUpdate(webview);
           break;
 
         case 'newConversation':
@@ -469,6 +498,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     } else if (choice === 'yes') {
       const continuationPrompt = "Permission granted for the requested command. Please proceed with the task.";
       this.executePrompt(continuationPrompt, [], false);
+    } else if (choice === 'no' || choice === 'deny' || choice === 'cancel') {
+      this.processManager.cancelCurrentTask();
+      this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
     } else if (choice === 'settings') {
       vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity.dangerouslySkipPermissions');
     }
@@ -502,70 +534,110 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     return parts.join('\n\n');
   }
 
-  private handleSlashCommand(name: string, arg: string | undefined, webview: vscode.Webview) {
-    const uiCommands = ['new', 'clear', 'settings', 'help', 'plan'];
-    if (!uiCommands.includes(name)) {
-      let promptText = '';
-      if (name === 'skill') {
-        promptText = arg ? `Use the ${arg} skill.` : '/skill';
-      } else if (arg) {
-        promptText = `/${name} ${arg}`;
-      } else {
-        promptText = `/${name}`;
+  public handleSlashCommand(name: string, arg?: string, targetWebview?: vscode.Webview) {
+    if (name === 'new') {
+      this.sessionSkipPermissions = false;
+      this.sessionAllowedCommands.clear();
+      this.processManager.newSession();
+      if (this.context) {
+        this.context.workspaceState.update('activeConversationId', undefined);
       }
-      this.onUserPrompt(promptText, []);
       return;
     }
 
-    switch (name) {
-      case 'new':
-        this.sessionSkipPermissions = false;
-        this.sessionAllowedCommands.clear();
-        this.processManager.newSession();
-        webview.postMessage({ type: 'slashResult', name, message: 'New conversation started.' });
-        break;
-
-      case 'plan': {
-        const title = arg ? arg.trim() : 'Feature Plan';
-        const now = new Date();
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        const timestampStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-        const planFilePath = `.antigravity/plans/PLAN-${timestampStr}.md`;
-
-        const planPrompt = `[PLAN MODE] Analyze the following feature request and create a detailed implementation plan: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed. Then write the implementation plan to "${planFilePath}" formatted with markdown checkboxes '- [ ] task description'.`;
-        this.onUserPrompt(planPrompt, []);
-        break;
-      }
-
-      case 'clear':
-        this.sessionSkipPermissions = false;
-        this.sessionAllowedCommands.clear();
-        this.processManager.newSession();
-        webview.postMessage({ type: 'slashResult', name, message: 'Chat cleared.' });
-        break;
-
-      case 'settings':
-        vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity');
-        break;
-
-      case 'help': {
-        const help = [
-          '/new        start a new conversation',
-          '/clear      clear chat history',
-          '/settings   open extension settings',
-          '/help       show this list',
-        ].join('\n');
-        webview.postMessage({ type: 'slashResult', name, message: help });
-        break;
-      }
+    if (name === 'clear') {
+      this.sessionSkipPermissions = false;
+      this.sessionAllowedCommands.clear();
+      this.processManager.newSession();
+      return;
     }
+
+    if (name === 'sandbox') {
+      const config = vscode.workspace.getConfiguration('antigravity');
+      const currentBypass = config.get<boolean>('bypassSandbox') === true;
+      let nextBypass = !currentBypass;
+      if (arg === 'on') nextBypass = false;
+      if (arg === 'off') nextBypass = true;
+      config.update('bypassSandbox', nextBypass, vscode.ConfigurationTarget.Global);
+      return;
+    }
+
+    if (name === 'dangerous') {
+      const config = vscode.workspace.getConfiguration('antigravity');
+      const currentDsp = config.get<boolean>('dangerouslySkipPermissions') === true;
+      let nextDsp = !currentDsp;
+      if (arg === 'on') nextDsp = true;
+      if (arg === 'off') nextDsp = false;
+      config.update('dangerouslySkipPermissions', nextDsp, vscode.ConfigurationTarget.Global);
+      return;
+    }
+
+    if (name === 'settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity');
+      return;
+    }
+
+    if (name === 'help') {
+      const helpMessage = [
+        '### Antigravity Slash Commands & Help',
+        '',
+        '| Command | Description |',
+        '| :--- | :--- |',
+        '| `/sandbox <on\\|off>` | Toggle container sandboxing (`sandbox on` / `sandbox off`) |',
+        '| `/dangerous <on\\|off>` | Toggle permission auto-approvals (`auto accept` / `default`) |',
+        '| `/plan [description]` | Start Plan Mode and generate implementation plan |',
+        '| `/new` | Start a fresh conversation session |',
+        '| `/clear` | Clear chat history |',
+        '| `/settings` | Open extension settings pane |',
+        '| `/help` | Display this command help card |',
+        '| `/<skill-name>` | Execute local agent skill |',
+        '',
+        '**Keyboard Shortcuts:**',
+        '- `Shift+Tab`: Cycle execution modes (`Default` -> `plan` -> `auto accept` -> `Default`)',
+      ].join('\n');
+
+      const postMsg = (wv: vscode.Webview) => wv.postMessage({
+        type: 'slashResult',
+        name: 'help',
+        message: helpMessage,
+      });
+
+      if (targetWebview) {
+        postMsg(targetWebview);
+      } else {
+        this.getWebviews().forEach(postMsg);
+      }
+      return;
+    }
+
+    if (name === 'plan') {
+      const title = arg ? arg.trim() : 'Feature Plan';
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const timestampStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const planFilePath = `.antigravity/plans/PLAN-${timestampStr}.md`;
+
+      const planPrompt = `[PLAN MODE] Analyze the following feature request and create a detailed implementation plan: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed. Then write the implementation plan to "${planFilePath}" formatted with markdown checkboxes '- [ ] task description'.`;
+      this.onUserPrompt(planPrompt, []);
+      return;
+    }
+
+    let promptText = '';
+    if (name === 'skill') {
+      promptText = arg ? `Use the ${arg} skill.` : 'Use a skill.';
+    } else {
+      promptText = arg ? `Use the ${name} skill. ${arg}` : `Use the ${name} skill.`;
+    }
+    this.onUserPrompt(promptText, []);
   }
 
-  private onUserPrompt(promptText: string, images?: string[]) {
+  private onUserPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
     this.lastUserPrompt = { promptText, images };
     const config = vscode.workspace.getConfiguration('antigravity');
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
-    const effectiveSkip = settingSkip || this.sessionSkipPermissions;
+    const effectiveSkip = dangerouslySkipPermissions !== undefined
+      ? dangerouslySkipPermissions
+      : (settingSkip || this.sessionSkipPermissions);
 
     this.executePrompt(promptText, images, effectiveSkip);
   }
@@ -1101,6 +1173,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 			<div class="input-footer">
 				<span id="status-text" class="input-hint status-indicator">enter to send, shift+enter for newline</span>
 				<div class="input-actions">
+					<span id="mode-text" class="mode-text" style="display: none;"></span>
+					<span id="sandbox-text" class="mode-text mode-sandbox" style="display: none;"></span>
 					<button id="attach-img-btn" class="icon-btn attach-btn" title="Attach Image">&#128206;</button>
 					<button id="cancel-btn" class="text-btn cancel-btn" style="display: none;">cancel</button>
 					<button id="send-btn" class="text-btn send-btn">send</button>

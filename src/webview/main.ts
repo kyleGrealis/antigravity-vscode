@@ -102,6 +102,28 @@ let atMenuIndex = 0;
 let atFilteredFiles: string[] = [];
 let atDebounceTimer: any = null;
 
+let activeMode: 'default' | 'plan' | 'auto' = 'default';
+
+function setExecutionMode(mode: 'default' | 'plan' | 'auto') {
+  activeMode = mode;
+  const modeTextEl = document.getElementById('mode-text');
+  if (!modeTextEl) return;
+
+  if (mode === 'plan') {
+    modeTextEl.textContent = 'plan';
+    modeTextEl.className = 'mode-text mode-plan';
+    modeTextEl.style.display = 'inline-block';
+  } else if (mode === 'auto') {
+    modeTextEl.textContent = 'auto accept';
+    modeTextEl.className = 'mode-text mode-auto';
+    modeTextEl.style.display = 'inline-block';
+  } else {
+    modeTextEl.textContent = '';
+    modeTextEl.className = 'mode-text';
+    modeTextEl.style.display = 'none';
+  }
+}
+
 attachImgBtn?.addEventListener('click', () => {
   vscode.postMessage({ command: 'selectImage' });
 });
@@ -180,6 +202,35 @@ input?.addEventListener('keydown', (e) => {
       return;
     }
   }
+
+  if (e.key === 'Tab' && e.shiftKey) {
+    e.preventDefault();
+    if (activeMode === 'default') {
+      setExecutionMode('plan');
+    } else if (activeMode === 'plan') {
+      setExecutionMode('auto');
+    } else {
+      setExecutionMode('default');
+    }
+    return;
+  }
+
+  if (e.key === 'Escape') {
+    if (isAtMenuVisible()) {
+      hideAtMenu();
+      return;
+    }
+    if (isSlashMenuVisible()) {
+      hideSlashMenu();
+      return;
+    }
+    if (isBusyState) {
+      e.preventDefault();
+      vscode.postMessage({ command: 'cancel' });
+      return;
+    }
+  }
+
   if (isAtMenuVisible()) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -564,29 +615,34 @@ function executeSlashCommand(name: string, arg?: string) {
     messages = [];
     currentStreamingMessage = null;
     renderAll();
+    vscode.postMessage({ command: 'slashCommand', name, arg });
+    return;
   }
-  if (name === 'plan') {
-    const userText = `/plan ${arg || ''}`.trim();
-    messages.push({
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text: userText,
-    });
-    currentStreamingMessage = {
-      id: `a-${Date.now()}`,
-      role: 'assistant',
-      text: 'Analyzing workspace and generating implementation plan...',
-      thinking: '',
-      isPlanMode: true,
-      toolCalls: [],
-      isStreaming: true,
-    };
-    if (currentStreamingMessage) {
-      messages.push(currentStreamingMessage);
-    }
-    renderAll(true);
-    setBusy(true);
+  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous') {
+    vscode.postMessage({ command: 'slashCommand', name, arg });
+    return;
   }
+
+  const userText = arg ? `/${name} ${arg}` : `/${name}`;
+  messages.push({
+    id: `u-${Date.now()}`,
+    role: 'user',
+    text: userText,
+  });
+
+  currentStreamingMessage = {
+    id: `a-${Date.now()}`,
+    role: 'assistant',
+    text: name === 'plan' ? 'Analyzing workspace and generating implementation plan...' : '',
+    thinking: '',
+    isPlanMode: name === 'plan',
+    toolCalls: [],
+    isStreaming: true,
+  };
+  messages.push(currentStreamingMessage);
+  renderAll(true);
+  setBusy(true);
+
   vscode.postMessage({ command: 'slashCommand', name, arg });
 }
 
@@ -605,19 +661,29 @@ function sendPrompt() {
     currentDraft = '';
   }
 
-  hideSlashMenu();
+  const currentMode = activeMode;
+  if (currentMode === 'plan') {
+    setExecutionMode('default');
+  }
 
   const slashMatch = text.match(/^\/(\S+)\s*(.*)?$/);
   if (slashMatch) {
     const cmdName = slashMatch[1];
     const cmdArg = slashMatch[2]?.trim() || undefined;
     const known = SLASH_COMMANDS.find(c => c.name === cmdName);
-    if (known) {
+    if (known || !cmdName.includes('/')) {
       input.value = '';
       input.style.height = 'auto';
       executeSlashCommand(cmdName, cmdArg);
       return;
     }
+  }
+
+  if (currentMode === 'plan') {
+    input.value = '';
+    input.style.height = 'auto';
+    executeSlashCommand('plan', text);
+    return;
   }
 
   const imagesToSend = [...attachedImages];
@@ -656,6 +722,7 @@ function sendPrompt() {
     command: 'sendPrompt',
     text,
     images: imagesToSend.length > 0 ? imagesToSend : undefined,
+    dangerouslySkipPermissions: currentMode === 'auto' || undefined,
   });
 }
 
@@ -681,7 +748,10 @@ function renderImageBar() {
   });
 }
 
+let isBusyState = false;
+
 function setBusy(busy: boolean) {
+  isBusyState = busy;
   if (sendBtn) sendBtn.style.display = busy ? 'none' : 'inline';
   if (cancelBtn) cancelBtn.style.display = busy ? 'inline' : 'none';
   if (statusEl) {
@@ -1016,7 +1086,7 @@ function renderAll(autoScrollForce: boolean = false) {
 
         const hintEl = document.createElement('span');
         hintEl.className = 'tool-expand-hint';
-        hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
+        hintEl.textContent = tc.expanded ? '▼' : '▶';
 
         header.appendChild(statusIcon);
         header.appendChild(callSigEl);
@@ -1132,7 +1202,19 @@ function renderAll(autoScrollForce: boolean = false) {
             }
             resultBlock.appendChild(pre);
 
-            if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
+            if ((tc as any).permissionState === 'denied') {
+              const actionBar = document.createElement('div');
+              actionBar.className = 'perm-action-bar';
+              actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
+              actionBar.innerHTML = '<span class="perm-denied-badge" style="color: #f14c4c; font-size: 11px; font-weight: 500;">✕ Permission Denied</span>';
+              resultBlock.appendChild(actionBar);
+            } else if ((tc as any).permissionState === 'granted') {
+              const actionBar = document.createElement('div');
+              actionBar.className = 'perm-action-bar';
+              actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
+              actionBar.innerHTML = '<span style="color: var(--vscode-testing-iconPassed, #4ec9b0); font-size: 11px; font-weight: 500;">✓ Permission Granted</span>';
+              resultBlock.appendChild(actionBar);
+            } else if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
               const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
               const rawCmd = match ? match[1].trim() : '';
               const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
@@ -1149,10 +1231,8 @@ function renderAll(autoScrollForce: boolean = false) {
                 yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
                 yesBtn.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  yesBtn.disabled = true;
-                  yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
-                  if (sessionBtn) sessionBtn.disabled = true;
-                  if (noBtn) noBtn.disabled = true;
+                  (tc as any).permissionState = 'granted';
+                  actionBar.innerHTML = '<span style="color: var(--vscode-testing-iconPassed, #4ec9b0); font-size: 11px; font-weight: 500;">✓ Permission Granted</span>';
 
                   currentStreamingMessage = {
                     id: `a-${Date.now()}`,
@@ -1176,10 +1256,8 @@ function renderAll(autoScrollForce: boolean = false) {
                 sessionBtn.textContent = '✓ Yes for all commands in this session';
                 sessionBtn.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  sessionBtn.disabled = true;
-                  sessionBtn.textContent = '✓ Yes for session - resuming...';
-                  if (yesBtn) yesBtn.disabled = true;
-                  if (noBtn) noBtn.disabled = true;
+                  (tc as any).permissionState = 'granted';
+                  actionBar.innerHTML = '<span style="color: var(--vscode-testing-iconPassed, #4ec9b0); font-size: 11px; font-weight: 500;">✓ Session Permission Granted</span>';
 
                   currentStreamingMessage = {
                     id: `a-${Date.now()}`,
@@ -1203,9 +1281,13 @@ function renderAll(autoScrollForce: boolean = false) {
                 noBtn.textContent = '✕ No';
                 noBtn.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  noBtn.disabled = true;
-                  if (yesBtn) yesBtn.disabled = true;
-                  if (sessionBtn) sessionBtn.disabled = true;
+                  (tc as any).permissionState = 'denied';
+                  actionBar.innerHTML = '<span class="perm-denied-badge" style="color: #f14c4c; font-size: 11px; font-weight: 500;">✕ Permission Denied</span>';
+                  const statusIcon = accordion.querySelector('.tool-status-icon');
+                  if (statusIcon) {
+                    statusIcon.textContent = '✕';
+                    statusIcon.className = 'tool-status-icon error';
+                  }
                   setBusy(false);
                   vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
                 });
@@ -1246,7 +1328,7 @@ function renderAll(autoScrollForce: boolean = false) {
           if (target.classList.contains('clickable-file')) return;
 
           tc.expanded = !tc.expanded;
-          hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
+          hintEl.textContent = tc.expanded ? '▼' : '▶';
           body.classList.toggle('open', tc.expanded);
           header.classList.toggle('open', tc.expanded);
           accordion.classList.toggle('open', tc.expanded);
@@ -1679,6 +1761,27 @@ function renderPermissionPromptCard(promptText?: string) {
 
 window.addEventListener('message', (event) => {
   const data = event.data;
+
+  if (data.command === 'configUpdate' || data.type === 'configUpdate') {
+    if (data.dangerouslySkipPermissions === true) {
+      setExecutionMode('auto');
+    } else if (data.dangerouslySkipPermissions === false && activeMode === 'auto') {
+      setExecutionMode('default');
+    }
+
+    const sandboxTextEl = document.getElementById('sandbox-text');
+    if (sandboxTextEl) {
+      if (data.bypassSandbox === true) {
+        sandboxTextEl.innerHTML = '<span style="color: #eab308;">sandbox off</span>';
+        sandboxTextEl.className = 'mode-text';
+        sandboxTextEl.style.display = 'inline-block';
+      } else {
+        sandboxTextEl.innerHTML = '<span style="color: #eab308;">sandbox</span> <span style="color: var(--vscode-charts-green, #4ec9b0);">on</span>';
+        sandboxTextEl.className = 'mode-text';
+        sandboxTextEl.style.display = 'inline-block';
+      }
+    }
+  }
 
   switch (data.type) {
     case 'focusInput':
@@ -2493,3 +2596,6 @@ function renderClarificationCard(q: { question: string; options?: string[]; isMu
 
   return card;
 }
+
+vscode.postMessage({ command: 'ready' });
+

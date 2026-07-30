@@ -2,7 +2,7 @@
 	"name": "antigravity-vscode",
 	"displayName": "Antigravity for VS Code",
 	"description": "Antigravity CLI inside VS Code: Harness the power of Google Antigravity directly in your editor",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"publisher": "antigravity",
 	"license": "MIT",
 	"repository": {
@@ -42,6 +42,11 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Auto-approve all tool permission requests without prompting. When disabled (recommended), Antigravity will prompt for permission before executing tools."
+				},
+				"antigravity.bypassSandbox": {
+					"type": "boolean",
+					"default": false,
+					"description": "Bypass sandbox container isolation for tool command executions."
 				}
 			}
 		},
