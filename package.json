@@ -2,7 +2,7 @@
 	"name": "antigravity-vscode",
 	"displayName": "Antigravity for VS Code",
 	"description": "Antigravity CLI inside VS Code: Harness the power of Google Antigravity directly in your editor",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"publisher": "antigravity",
 	"license": "MIT",
 	"repository": {
