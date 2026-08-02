@@ -1,10 +1,16 @@
 import { marked } from 'marked';
-import mermaid from 'mermaid';
-import { ToolCall, Message, SlashCommand, SlashDisplayItem, SlashOption } from './types';
-import { esc, cleanValue } from './utils/escape';
-import { toPascalCaseName, getArgVal, parseJsonArgs, extractJsonStringField, formatToolSummary, formatToolArgsForDisplay } from './utils/formatters';
-import { extractStringResult, extractTargetFile, isDiffText, isFileEditTool, buildDiffFromToolArgs, renderDiffOrTextHtml } from './utils/diffBuilder';
+import { Message } from './types';
+import { esc } from './utils/escape';
+import { parseJsonArgs } from './utils/formatters';
+import { isDiffText, renderDiffOrTextHtml } from './utils/diffBuilder';
 import { renderToolCallCard } from './components/toolCard';
+import { initAtMenu, setAtFilteredFiles, getAtMatch, isAtMenuVisible, updateAtMenu, hideAtMenu, acceptAtItem, navigateAtMenu } from './controllers/atMenuController';
+import { initMermaidController, renderMermaidDiagrams } from './controllers/mermaidModal';
+import { initSlashMenu, setSlashCommands, isSlashMenuVisible, updateSlashMenu, hideSlashMenu, acceptSlashItem, navigateSlashMenu, getSlashCommands } from './controllers/slashMenuController';
+import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering, setIsRendering, setDirtyWhileScrolledUp, resetScrollState, showScrollToBottomPill, hideScrollToBottomPill, scrollToBottom, getScrollMetrics } from './controllers/scrollManager';
+import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
+import { initSessionHistory, updateWorkspaceHeaderBadge, renderHistoryDropdown } from './controllers/sessionHistory';
+import { initPlanCard, renderPlanCard, renderClarificationCard } from './controllers/planCard';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -13,79 +19,17 @@ const vscode = acquireVsCodeApi();
 
 
 
-let SLASH_COMMANDS: SlashCommand[] = [
-  { name: 'sandbox', description: 'toggle sandboxing (on|off)', hasArg: true },
-  { name: 'dangerous', description: 'toggle permission auto-approvals (on|off)', hasArg: true },
-  { name: 'plan', description: 'trigger plan mode with optional description', hasArg: true },
-  { name: 'usage', description: 'show session token usage statistics overlay' },
-  { name: 'new', description: 'start a new conversation' },
-  { name: 'clear', description: 'clear chat history' },
-  { name: 'settings', description: 'open extension settings' },
-  { name: 'help', description: 'show available commands' },
-];
-
 const savedState = vscode.getState() as { messages?: Message[] } | undefined;
 let messages: Message[] = savedState?.messages || [];
 let currentStreamingMessage: Message | null = null;
 let activeConversationId: string | null = null;
-let slashMenuIndex = 0;
-let slashFiltered: SlashDisplayItem[] = [];
 
 let attachedImages: string[] = [];
 
 const log = document.getElementById('chat-messages') as HTMLElement;
-let isRendering = false;
-let isUserScrolledUp = false;
-let dirtyWhileScrolledUp = false;
-let scrollToBottomPillEl: HTMLElement | null = null;
-
-function getScrollToBottomPill(): HTMLElement {
-  if (!scrollToBottomPillEl) {
-    scrollToBottomPillEl = document.createElement('div');
-    scrollToBottomPillEl.className = 'scroll-to-bottom-pill';
-    scrollToBottomPillEl.innerHTML = `<span class="scroll-to-bottom-pill-arrow">↓</span><span>New activity below</span>`;
-    scrollToBottomPillEl.onclick = () => {
-      isUserScrolledUp = false;
-      dirtyWhileScrolledUp = false;
-      hideScrollToBottomPill();
-      renderAll(true);
-    };
-    document.body.appendChild(scrollToBottomPillEl);
-  }
-  return scrollToBottomPillEl;
-}
-
-function showScrollToBottomPill() {
-  const pill = getScrollToBottomPill();
-  pill.classList.add('visible');
-}
-
-function hideScrollToBottomPill() {
-  if (scrollToBottomPillEl) {
-    scrollToBottomPillEl.classList.remove('visible');
-  }
-}
 
 if (log) {
-  const markUserScrolled = () => {
-    if (isRendering) return;
-    const distanceFromBottom = log.scrollHeight - log.scrollTop - log.clientHeight;
-    if (distanceFromBottom > 60) {
-      isUserScrolledUp = true;
-    } else {
-      const wasScrolledUp = isUserScrolledUp;
-      isUserScrolledUp = false;
-      hideScrollToBottomPill();
-      if (wasScrolledUp && dirtyWhileScrolledUp) {
-        dirtyWhileScrolledUp = false;
-        renderAll(true);
-      }
-    }
-  };
-
-  log.addEventListener('wheel', markUserScrolled, { passive: true });
-  log.addEventListener('touchmove', markUserScrolled, { passive: true });
-  log.addEventListener('scroll', markUserScrolled, { passive: true });
+  initScrollManager(log, () => renderAll(true));
 }
 
 const input = document.getElementById('prompt-input') as HTMLTextAreaElement;
@@ -105,19 +49,72 @@ const contextBar = document.getElementById('context-bar') as HTMLElement;
 const slashMenu = document.getElementById('slash-menu') as HTMLElement;
 const atMenu = document.getElementById('at-menu') as HTMLElement;
 
-let promptHistory: string[] = [];
-try {
-  const saved = localStorage.getItem('antigravity_prompt_history');
-  if (saved) {
-    promptHistory = JSON.parse(saved);
-  }
-} catch (e) {}
-let historyIndex: number = promptHistory.length;
-let currentDraft: string = '';
+initAtMenu(input, atMenu, (msg: any) => vscode.postMessage(msg));
+initSlashMenu(input, slashMenu);
+initMermaidController(copyTextToClipboard);
+initSessionHistory(historyDropdown, (msg: any) => vscode.postMessage(msg));
+initPlanCard({
+  getMessages: () => messages,
+  pushMessage: (msg) => messages.push(msg),
+  setCurrentStreamingMessage: (msg) => { currentStreamingMessage = msg; },
+  renderAll: (autoScroll, isUser) => renderAll(autoScroll, isUser),
+  setBusy,
+  postMessage: (msg) => vscode.postMessage(msg),
+  getInput: () => input,
+  sendPrompt,
+});
 
-let atMenuIndex = 0;
-let atFilteredFiles: string[] = [];
-let atDebounceTimer: any = null;
+let workspaceKey = '';
+let promptHistory: string[] = [];
+let historyIndex = 0;
+let currentDraft = '';
+
+function historyStorageKey() {
+  return workspaceKey ? `antigravity_prompt_history_${workspaceKey}` : 'antigravity_prompt_history';
+}
+
+function loadPromptHistory() {
+  promptHistory = [];
+  try {
+    const saved = localStorage.getItem(historyStorageKey());
+    if (saved) promptHistory = JSON.parse(saved);
+  } catch {}
+  historyIndex = promptHistory.length;
+  currentDraft = '';
+}
+
+function savePromptHistory() {
+  try {
+    localStorage.setItem(historyStorageKey(), JSON.stringify(promptHistory));
+  } catch {}
+}
+
+function setWorkspaceKey(name: string) {
+  if (!name || workspaceKey === name) return;
+  workspaceKey = name;
+  loadPromptHistory();
+}
+
+let resourceMappings: Array<{ prefix: string; base: string }> = [];
+
+function rewriteImageSources(container: HTMLElement) {
+  if (resourceMappings.length === 0) return;
+  container.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (!src || src.startsWith('https://') || src.startsWith('http://') || src.startsWith('data:') || src.startsWith('vscode-webview-resource:')) return;
+    const normalized = src.replace(/\\/g, '/');
+    for (const m of resourceMappings) {
+      const prefix = m.prefix.replace(/\\/g, '/');
+      if (normalized.startsWith(prefix)) {
+        const relative = normalized.slice(prefix.length).replace(/^\//, '');
+        img.src = `${m.base}/${relative}`;
+        return;
+      }
+    }
+  });
+}
+
+loadPromptHistory();
 
 let activeMode: 'default' | 'plan' | 'auto' = 'default';
 
@@ -256,14 +253,12 @@ input?.addEventListener('keydown', (e) => {
   if (isAtMenuVisible()) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      atMenuIndex = (atMenuIndex + 1) % atFilteredFiles.length;
-      renderAtMenu();
+      navigateAtMenu('down');
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      atMenuIndex = (atMenuIndex - 1 + atFilteredFiles.length) % atFilteredFiles.length;
-      renderAtMenu();
+      navigateAtMenu('up');
       return;
     }
     if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
@@ -281,14 +276,12 @@ input?.addEventListener('keydown', (e) => {
   if (isSlashMenuVisible()) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      slashMenuIndex = (slashMenuIndex + 1) % slashFiltered.length;
-      renderSlashMenu();
+      navigateSlashMenu('down');
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      slashMenuIndex = (slashMenuIndex - 1 + slashFiltered.length) % slashFiltered.length;
-      renderSlashMenu();
+      navigateSlashMenu('up');
       return;
     }
     if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
@@ -432,445 +425,18 @@ log?.addEventListener('click', (e) => {
       vscode.postMessage({ command: 'openFile', filePath: pathAttr });
     }
   }
+
+  if (target.tagName === 'IMG') {
+    const src = (target as HTMLImageElement).src;
+    if (src && !src.startsWith('data:')) {
+      vscode.postMessage({ command: 'openFile', filePath: src });
+    }
+  }
 });
-
-function getSlashMatch(): { prefix: string; query: string } | null {
-  const val = input.value;
-  const match = val.match(/^\/(\S*)$/);
-  if (!match) return null;
-  return { prefix: '/', query: match[1] };
-}
-
-function isSlashMenuVisible(): boolean {
-  return slashMenu?.style.display !== 'none' && slashFiltered.length > 0;
-}
-
-function updateSlashMenu() {
-  const val = input.value;
-  if (!val.startsWith('/')) {
-    hideSlashMenu();
-    return;
-  }
-
-  // Check if command + argument (e.g. /model ... or /effort ...)
-  const spaceIndex = val.indexOf(' ');
-  if (spaceIndex !== -1) {
-    const cmdName = val.slice(1, spaceIndex).toLowerCase();
-    const argQuery = val.slice(spaceIndex + 1).toLowerCase();
-    const cmd = SLASH_COMMANDS.find(c => c.name === cmdName);
-    if (cmd && cmd.options) {
-      const matchingOpts = cmd.options.filter(o => o.value.toLowerCase().includes(argQuery) || o.label.toLowerCase().includes(argQuery));
-      if (matchingOpts.length > 0) {
-        slashFiltered = matchingOpts.map(o => ({
-          name: cmd.name,
-          displayName: `/${cmd.name} ${o.value}`,
-          description: o.label,
-          insertValue: `/${cmd.name} ${o.value}`,
-        }));
-        slashMenuIndex = 0;
-        renderSlashMenu();
-        if (slashMenu) slashMenu.style.display = 'block';
-        return;
-      }
-    }
-    hideSlashMenu();
-    return;
-  }
-
-  // Matching top-level command (e.g. / or /mod)
-  const q = val.slice(1).toLowerCase();
-  const matchedCmds = SLASH_COMMANDS.filter(c => c.name.startsWith(q));
-  if (matchedCmds.length === 0) {
-    hideSlashMenu();
-    return;
-  }
-
-  slashFiltered = matchedCmds.map(c => ({
-    name: c.name,
-    displayName: `/${c.name}`,
-    description: c.description + (c.argHint ? ` ${c.argHint}` : ''),
-    hasArg: c.hasArg,
-    isSkill: c.isSkill,
-  }));
-  slashMenuIndex = 0;
-  renderSlashMenu();
-  if (slashMenu) slashMenu.style.display = 'block';
-}
-
-function renderSlashMenu() {
-  if (!slashMenu) return;
-  slashMenu.innerHTML = '';
-  slashFiltered.forEach((cmd, i) => {
-    const row = document.createElement('div');
-    row.className = 'slash-item' + (i === slashMenuIndex ? ' active' : '');
-    const badgeHtml = cmd.isSkill ? `<span class="slash-badge">skill</span>` : '';
-    row.innerHTML = `<span class="slash-name">${esc(cmd.displayName)}</span>${badgeHtml}<span class="slash-desc">${esc(cmd.description)}</span>`;
-    row.addEventListener('mouseenter', () => {
-      slashMenuIndex = i;
-      const items = slashMenu.querySelectorAll('.slash-item');
-      items.forEach((el, idx) => {
-        el.classList.toggle('active', idx === slashMenuIndex);
-      });
-    });
-    row.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      slashMenuIndex = i;
-      acceptSlashItem();
-    });
-    slashMenu.appendChild(row);
-  });
-
-  const activeEl = slashMenu.querySelector('.slash-item.active') as HTMLElement;
-  if (activeEl) {
-    activeEl.scrollIntoView({ block: 'nearest' });
-  }
-}
-
-function acceptSlashItem() {
-  const item = slashFiltered[slashMenuIndex];
-  if (!item) return;
-  if (item.insertValue) {
-    input.value = item.insertValue + (item.insertValue.endsWith(' ') ? '' : ' ');
-  } else {
-    input.value = `/${item.name} `;
-  }
-  hideSlashMenu();
-  input.focus();
-  const len = input.value.length;
-  input.setSelectionRange(len, len);
-}
-
-function hideSlashMenu() {
-  if (slashMenu) slashMenu.style.display = 'none';
-  slashFiltered = [];
-}
-
-function getAtMatch(): { start: number; end: number; query: string } | null {
-  if (!input) return null;
-  const cursor = input.selectionStart;
-  const textBeforeCursor = input.value.slice(0, cursor);
-  const match = textBeforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
-  if (!match) return null;
-  const atIndex = textBeforeCursor.lastIndexOf('@');
-  if (atIndex < 0) return null;
-  return {
-    start: atIndex,
-    end: cursor,
-    query: match[1],
-  };
-}
-
-function isAtMenuVisible(): boolean {
-  return atMenu?.style.display !== 'none' && atFilteredFiles.length > 0;
-}
-
-function updateAtMenu() {
-  const match = getAtMatch();
-  if (!match) {
-    hideAtMenu();
-    return;
-  }
-  if (atDebounceTimer) clearTimeout(atDebounceTimer);
-  atDebounceTimer = setTimeout(() => {
-    vscode.postMessage({ command: 'searchFiles', query: match.query });
-  }, 100);
-}
-
-function hideAtMenu() {
-  if (atMenu) atMenu.style.display = 'none';
-  atFilteredFiles = [];
-}
-
-function renderAtMenu() {
-  if (!atMenu) return;
-  atMenu.innerHTML = '';
-  if (atFilteredFiles.length === 0) {
-    atMenu.style.display = 'none';
-    return;
-  }
-
-  atFilteredFiles.forEach((file, i) => {
-    const row = document.createElement('div');
-    row.className = 'at-item' + (i === atMenuIndex ? ' active' : '');
-    row.innerHTML = `<span class="at-icon">@</span><span class="at-path">${esc(file)}</span>`;
-    row.addEventListener('mouseenter', () => {
-      atMenuIndex = i;
-      const items = atMenu.querySelectorAll('.at-item');
-      items.forEach((el, idx) => {
-        el.classList.toggle('active', idx === atMenuIndex);
-      });
-    });
-    row.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      atMenuIndex = i;
-      acceptAtItem();
-    });
-    atMenu.appendChild(row);
-  });
-  atMenu.style.display = 'block';
-
-  const activeEl = atMenu.querySelector('.at-item.active') as HTMLElement;
-  if (activeEl) {
-    activeEl.scrollIntoView({ block: 'nearest' });
-  }
-}
-
-function acceptAtItem() {
-  const file = atFilteredFiles[atMenuIndex];
-  if (!file) return;
-  const match = getAtMatch();
-  if (!match) return;
-
-  const before = input.value.slice(0, match.start);
-  const after = input.value.slice(match.end);
-  const replacement = `@${file} `;
-  input.value = before + replacement + after;
-  const newCursorPos = before.length + replacement.length;
-  input.setSelectionRange(newCursorPos, newCursorPos);
-
-  hideAtMenu();
-  input.focus();
-}
-
-function saveSessionUsage(convId: string | null, usage: any, messageId?: string) {
-  if (!usage) return;
-  try {
-    const targetConvId = convId || activeConversationId;
-    const keys: string[] = ['antigravity_latest_usage'];
-    if (targetConvId) keys.push(`antigravity_usage_${targetConvId}`);
-
-    for (const key of keys) {
-      const raw = localStorage.getItem(key);
-      let sessionData: {
-        turns: Record<string, { inTokens: number; outTokens: number; thinkTokens: number; cacheTokens: number; sum: number }>;
-        totalIn: number;
-        totalOut: number;
-        totalThink: number;
-        totalCache: number;
-        totalSum: number;
-      } = raw
-        ? JSON.parse(raw)
-        : { turns: {}, totalIn: 0, totalOut: 0, totalThink: 0, totalCache: 0, totalSum: 0 };
-
-      if (!sessionData.turns || Array.isArray(sessionData.turns)) {
-        const oldArray = Array.isArray(sessionData.turns) ? (sessionData.turns as any[]) : [];
-        sessionData.turns = {};
-        oldArray.forEach((t, idx) => {
-          sessionData.turns[`turn_${idx}`] = t;
-        });
-      }
-
-      const turnKey = messageId || (currentStreamingMessage ? currentStreamingMessage.id : 'latest_turn');
-
-      const inVal = usage.input_tokens || 0;
-      const outVal = usage.output_tokens || 0;
-      const thinkVal = usage.thinking_tokens || 0;
-      const cacheVal = usage.cache_read_tokens || 0;
-      const sumVal = usage.total_tokens || (inVal + outVal + thinkVal);
-
-      sessionData.turns[turnKey] = {
-        inTokens: inVal,
-        outTokens: outVal,
-        thinkTokens: thinkVal,
-        cacheTokens: cacheVal,
-        sum: sumVal,
-      };
-
-      let tIn = 0, tOut = 0, tThink = 0, tCache = 0, tSum = 0;
-      Object.values(sessionData.turns).forEach((t) => {
-        tIn += t.inTokens || 0;
-        tOut += t.outTokens || 0;
-        tThink += t.thinkTokens || 0;
-        tCache += t.cacheTokens || 0;
-        tSum += t.sum || 0;
-      });
-
-      sessionData.totalIn = tIn;
-      sessionData.totalOut = tOut;
-      sessionData.totalThink = tThink;
-      sessionData.totalCache = tCache;
-      sessionData.totalSum = tSum;
-
-      localStorage.setItem(key, JSON.stringify(sessionData));
-    }
-  } catch (e) {
-    console.error('Failed to save session usage:', e);
-  }
-}
-
-function showUsageOverlay() {
-  const existing = document.getElementById('usage-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
-
-  let totalIn = 0;
-  let totalOut = 0;
-  let totalThink = 0;
-  let totalCache = 0;
-  let totalTokens = 0;
-
-  const rows: Array<{ index: number; role: string; inTokens: number; outTokens: number; thinkTokens: number; sum: number }> = [];
-  let turnIdx = 1;
-
-  messages.forEach((msg) => {
-    if (msg.tokens) {
-      const inVal = msg.tokens.input_tokens || 0;
-      const outVal = msg.tokens.output_tokens || 0;
-      const thinkVal = msg.tokens.thinking_tokens || 0;
-      const cacheVal = (msg.tokens as any).cache_read_tokens || 0;
-      const sumVal = msg.tokens.total_tokens || (inVal + outVal + thinkVal);
-
-      totalIn += inVal;
-      totalOut += outVal;
-      totalThink += thinkVal;
-      totalCache += cacheVal;
-      totalTokens += sumVal;
-
-      rows.push({
-        index: turnIdx++,
-        role: msg.role === 'user' ? 'User' : 'Assistant',
-        inTokens: inVal,
-        outTokens: outVal,
-        thinkTokens: thinkVal,
-        sum: sumVal,
-      });
-    }
-  });
-
-  if (totalTokens === 0) {
-    try {
-      let savedRaw = activeConversationId ? localStorage.getItem(`antigravity_usage_${activeConversationId}`) : null;
-      if (!savedRaw) {
-        savedRaw = localStorage.getItem('antigravity_latest_usage');
-      }
-      if (savedRaw) {
-        const saved = JSON.parse(savedRaw);
-        totalIn = saved.totalIn || 0;
-        totalOut = saved.totalOut || 0;
-        totalThink = saved.totalThink || 0;
-        totalCache = saved.totalCache || 0;
-        totalTokens = saved.totalSum || (totalIn + totalOut + totalThink);
-        if (saved.turns) {
-          const turnList = Array.isArray(saved.turns) ? saved.turns : Object.values(saved.turns);
-          turnList.forEach((t: any, i: number) => {
-            rows.push({
-              index: i + 1,
-              role: 'Assistant',
-              inTokens: t.inTokens || 0,
-              outTokens: t.outTokens || 0,
-              thinkTokens: t.thinkTokens || 0,
-              sum: t.sum || 0,
-            });
-          });
-        }
-      }
-    } catch (e) {}
-  }
-
-  const overlay = document.createElement('div');
-  overlay.id = 'usage-overlay';
-  overlay.className = 'usage-overlay';
-
-  const fmt = (n: number) => n.toLocaleString();
-
-  let tableHtml = '';
-  if (rows.length === 0) {
-    tableHtml = `<div class="usage-empty">No token usage metrics recorded for this session yet. Submit a prompt to view token usage.</div>`;
-  } else {
-    tableHtml = `
-      <div class="usage-table-wrapper">
-        <table class="usage-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Role</th>
-              <th>Input</th>
-              <th>Output</th>
-              <th>Thinking</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td>${r.index}</td>
-                <td>${r.role}</td>
-                <td>${fmt(r.inTokens)}</td>
-                <td>${fmt(r.outTokens)}</td>
-                <td>${r.thinkTokens ? fmt(r.thinkTokens) : '-'}</td>
-                <td><strong>${fmt(r.sum)}</strong></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  const cacheBadge = totalCache > 0 ? `<div class="usage-cache-note">⚡ Cache read tokens: <strong>${fmt(totalCache)}</strong></div>` : '';
-
-  overlay.innerHTML = `
-    <div class="usage-card">
-      <div class="usage-header">
-        <div class="usage-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-          </svg>
-          Session Token Usage Statistics
-        </div>
-        <button id="usage-close-btn" class="usage-close-btn" title="Close (Esc)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="usage-body">
-        <div class="usage-grid">
-          <div class="usage-stat-box input">
-            <span class="usage-stat-label">Input Tokens</span>
-            <span class="usage-stat-value">${fmt(totalIn)}</span>
-          </div>
-          <div class="usage-stat-box output">
-            <span class="usage-stat-label">Output Tokens</span>
-            <span class="usage-stat-value">${fmt(totalOut)}</span>
-          </div>
-          <div class="usage-stat-box thinking">
-            <span class="usage-stat-label">Thinking Tokens</span>
-            <span class="usage-stat-value">${fmt(totalThink)}</span>
-          </div>
-          <div class="usage-stat-box total">
-            <span class="usage-stat-label">Grand Total</span>
-            <span class="usage-stat-value">${fmt(totalTokens)}</span>
-          </div>
-        </div>
-        ${cacheBadge}
-        ${tableHtml}
-      </div>
-      <div class="usage-footer">
-        <span class="usage-footer-hint">Press Esc or click outside to close</span>
-      </div>
-    </div>
-  `;
-
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) {
-      overlay.remove();
-    }
-  });
-
-  document.body.appendChild(overlay);
-
-  document.getElementById('usage-close-btn')?.addEventListener('click', () => {
-    overlay.remove();
-  });
-}
 
 function executeSlashCommand(name: string, arg?: string) {
   if (name === 'usage') {
-    showUsageOverlay();
+    showUsageOverlay(messages, activeConversationId);
     return;
   }
   if (name === 'clear' || name === 'new') {
@@ -915,9 +481,7 @@ function sendPrompt() {
   if (text) {
     if (promptHistory.length === 0 || promptHistory[promptHistory.length - 1] !== text) {
       promptHistory.push(text);
-      try {
-        localStorage.setItem('antigravity_prompt_history', JSON.stringify(promptHistory));
-      } catch (e) {}
+      savePromptHistory();
     }
     historyIndex = promptHistory.length;
     currentDraft = '';
@@ -928,11 +492,22 @@ function sendPrompt() {
     setExecutionMode('default');
   }
 
+  const planAnywhere = text.match(/\/plan\b\s*(.*)/i);
+  if (planAnywhere) {
+    const before = text.slice(0, planAnywhere.index!).trim();
+    const after = (planAnywhere[1] || '').trim();
+    const planArg = [before, after].filter(Boolean).join(' ') || undefined;
+    input.value = '';
+    input.style.height = 'auto';
+    executeSlashCommand('plan', planArg);
+    return;
+  }
+
   const slashMatch = text.match(/^\/(\S+)\s*(.*)?$/);
   if (slashMatch) {
     const cmdName = slashMatch[1];
     const cmdArg = slashMatch[2]?.trim() || undefined;
-    const known = SLASH_COMMANDS.find(c => c.name === cmdName);
+    const known = getSlashCommands().find(c => c.name === cmdName);
     if (known || !cmdName.includes('/')) {
       input.value = '';
       input.style.height = 'auto';
@@ -1039,12 +614,75 @@ function setBusy(busy: boolean) {
   }
   if (cancelBtn) cancelBtn.style.display = busy ? 'inline-flex' : 'none';
   if (statusEl) {
-    statusEl.textContent = busy ? 'thinking... (enter to steer mid-turn)' : 'enter to send, shift+enter for newline';
+    if (busy) {
+      startThinkingRotation();
+    } else {
+      stopThinkingRotation();
+      statusEl.textContent = 'enter to send, shift+enter for newline';
+    }
     statusEl.className = busy ? 'input-hint status-indicator active' : 'input-hint status-indicator';
+  }
+  if (input) {
+    if (busy) {
+      input.placeholder = 'Queue another message...';
+    } else {
+      input.disabled = false;
+      const placeholders = [
+        'What are you working on?',
+        'Describe a task or ask a question...',
+        'What needs fixing?',
+        'What can I help you build?',
+        'Drop a task, question, or idea...',
+        'What\'s next?',
+      ];
+      input.placeholder = placeholders[Math.floor(Math.random() * placeholders.length)];
+    }
   }
 }
 
+const thinkingPhrases = [
+  'thinking...',
+  'on it...',
+  'working...',
+  'cooking...',
+  'brewing something...',
+  'crunching...',
+  'spinning up neurons...',
+  'consulting the oracle...',
+  'it\'s not a bug, it\'s an undocumented feature...',
+  'have you tried turning it off and on again?',
+  'reading the docs so you don\'t have to...',
+  'git push --force-with-lease...',
+  'rm -rf node_modules && npm install...',
+  'blaming the intern...',
+  'asking Stack Overflow...',
+];
+let thinkingInterval: any = null;
+let lastThinkingIndex = -1;
 
+function pickThinkingPhrase(): string {
+  let idx = Math.floor(Math.random() * thinkingPhrases.length);
+  while (idx === lastThinkingIndex && thinkingPhrases.length > 1) {
+    idx = Math.floor(Math.random() * thinkingPhrases.length);
+  }
+  lastThinkingIndex = idx;
+  return thinkingPhrases[idx];
+}
+
+function startThinkingRotation() {
+  stopThinkingRotation();
+  if (statusEl) statusEl.textContent = pickThinkingPhrase();
+  thinkingInterval = setInterval(() => {
+    if (statusEl) statusEl.textContent = pickThinkingPhrase();
+  }, 3000);
+}
+
+function stopThinkingRotation() {
+  if (thinkingInterval) {
+    clearInterval(thinkingInterval);
+    thinkingInterval = null;
+  }
+}
 
 function renderEmptyState() {
   if (!log) return;
@@ -1130,6 +768,7 @@ function updateStreamingDOM() {
       return;
     }
     bodyEl.innerHTML = marked.parse(currentStreamingMessage.text) as string;
+    rewriteImageSources(bodyEl);
     applyDiffHighlighting(bodyEl);
     if (currentStreamingMessage.isStreaming) {
       bodyEl.classList.add('streaming-cursor');
@@ -1137,52 +776,52 @@ function updateStreamingDOM() {
   }
 
   if (isUserScrolledUp) {
-    dirtyWhileScrolledUp = true;
+    setDirtyWhileScrolledUp(true);
     showScrollToBottomPill();
   } else {
-    log.scrollTop = log.scrollHeight;
+    scrollToBottom();
   }
 }
 
 function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean = false) {
   if (!log) return;
 
-  if (isUserScrolledUp && !autoScrollForce && !isUserInteraction) {
-    if (dirtyWhileScrolledUp) {
-      showScrollToBottomPill();
-      return;
-    }
-  }
+  setIsRendering(true);
 
-  isRendering = true;
-
-  const prevScrollTop = log.scrollTop;
-  const prevScrollHeight = log.scrollHeight;
-  const distanceFromBottom = prevScrollHeight - prevScrollTop - log.clientHeight;
-  const wasAtBottom = distanceFromBottom <= 60;
+  const { wasAtBottom } = getScrollMetrics();
 
   if (autoScrollForce) {
-    isUserScrolledUp = false;
-    dirtyWhileScrolledUp = false;
-    hideScrollToBottomPill();
+    resetScrollState();
   }
 
   if (messages.length === 0) {
     renderEmptyState();
-    isRendering = false;
+    setIsRendering(false);
     return;
   }
 
   log.innerHTML = '';
 
-  const isPlanModeActive = (currentStreamingMessage && (currentStreamingMessage as any).isPlanMode) ||
-                           messages.some(m => m.plan && !(m.plan as any).cancelled && m.plan.steps.filter((s: any) => s.completed).length < m.plan.steps.length);
-  const inputRow = document.querySelector('.input-row') as HTMLElement;
-  const contextBar = document.querySelector('.context-bar') as HTMLElement;
-  const imageBarEl = document.querySelector('.image-bar') as HTMLElement;
-  if (inputRow) inputRow.style.display = isPlanModeActive ? 'none' : '';
-  if (contextBar) contextBar.style.display = isPlanModeActive ? 'none' : '';
-  if (imageBarEl && attachedImages.length > 0) imageBarEl.style.display = isPlanModeActive ? 'none' : 'flex';
+  const isPlanBeingCreated = !!(currentStreamingMessage && (currentStreamingMessage as any).isPlanMode);
+  const hasPendingPlan = messages.some(m => m.plan && !(m.plan as any).cancelled && !(m.plan as any).isApproved &&
+                           m.plan.steps.filter((s: any) => s.completed).length === 0);
+  const isPlanExecuting = messages.some(m => m.plan && !(m.plan as any).cancelled && (m.plan as any).isApproved &&
+                           m.plan.steps.filter((s: any) => s.completed).length < m.plan.steps.length);
+
+  if (input) {
+    if (isPlanBeingCreated) {
+      input.disabled = true;
+      input.placeholder = 'Wait while I create the plan...';
+    } else if (hasPendingPlan) {
+      input.disabled = true;
+      input.placeholder = 'Review the plan above to approve, modify, or reject';
+    } else if (isPlanExecuting) {
+      input.disabled = false;
+      input.placeholder = 'Steer the plan execution...';
+    } else if (!isBusyState) {
+      input.disabled = false;
+    }
+  }
 
   let activeExecutingPlanMsg: Message | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -1238,7 +877,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
         const accordion = renderToolCallCard(
           tc,
           (m) => vscode.postMessage(m),
-          () => renderAll()
+          (autoScroll, isUser) => renderAll(autoScroll, isUser)
         );
         toolSection.appendChild(accordion);
       }
@@ -1291,265 +930,20 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
 
   attachCopyButtons(log);
   attachInlineCodeCopyHandlers(log);
+  rewriteImageSources(log);
   renderMermaidDiagrams(log);
 
   requestAnimationFrame(() => {
     if (autoScrollForce || wasAtBottom) {
-      log.scrollTop = log.scrollHeight;
+      scrollToBottom();
+    } else if (isUserScrolledUp && !isUserInteraction) {
+      showScrollToBottomPill();
     }
-    isRendering = false;
+    setIsRendering(false);
   });
 
   const toSave = messages.filter(m => !m.isStreaming);
   vscode.setState({ messages: toSave });
-}
-
-let mermaidInitialized = false;
-function initMermaid() {
-  if (mermaidInitialized) return;
-  const isDark = !document.body.classList.contains('vscode-light');
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'loose',
-    theme: isDark ? 'dark' : 'default',
-    fontFamily: 'var(--font-mono, Consolas, monospace)',
-  });
-  mermaidInitialized = true;
-}
-
-let mermaidCounter = 0;
-
-async function renderMermaidDiagrams(container: HTMLElement) {
-  const mermaidBlocks = container.querySelectorAll<HTMLElement>('pre code.language-mermaid, pre code.lang-mermaid');
-  if (mermaidBlocks.length === 0) return;
-
-  initMermaid();
-
-  for (const codeEl of Array.from(mermaidBlocks)) {
-    const pre = codeEl.closest('pre');
-    if (!pre || pre.dataset.mermaidProcessed === 'true') continue;
-    pre.dataset.mermaidProcessed = 'true';
-
-    const mermaidCode = codeEl.textContent || '';
-    if (!mermaidCode.trim()) continue;
-
-    const card = document.createElement('div');
-    card.className = 'mermaid-card';
-
-    const header = document.createElement('div');
-    header.className = 'mermaid-header';
-
-    const titleEl = document.createElement('div');
-    titleEl.className = 'mermaid-title';
-    titleEl.innerHTML = `<span class="mermaid-icon">📊</span><span>Mermaid Diagram</span>`;
-
-    const actions = document.createElement('div');
-    actions.className = 'mermaid-actions';
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'mermaid-btn';
-    toggleBtn.textContent = 'Code';
-    toggleBtn.title = 'Toggle Code/Diagram';
-
-    const copySvgBtn = document.createElement('button');
-    copySvgBtn.className = 'mermaid-btn';
-    copySvgBtn.textContent = 'Copy SVG';
-    copySvgBtn.title = 'Copy SVG Image';
-
-    const copyCodeBtn = document.createElement('button');
-    copyCodeBtn.className = 'mermaid-btn';
-    copyCodeBtn.textContent = 'Copy Code';
-    copyCodeBtn.title = 'Copy Mermaid Source Code';
-
-    const expandBtn = document.createElement('button');
-    expandBtn.className = 'mermaid-btn mermaid-btn-highlight';
-    expandBtn.textContent = '🔍 Expand';
-    expandBtn.title = 'Open Fullscreen Pan & Zoom View';
-
-    actions.appendChild(toggleBtn);
-    actions.appendChild(copySvgBtn);
-    actions.appendChild(copyCodeBtn);
-    actions.appendChild(expandBtn);
-
-    header.appendChild(titleEl);
-    header.appendChild(actions);
-
-    const viewport = document.createElement('div');
-    viewport.className = 'mermaid-viewport';
-
-    const sourceWrapper = document.createElement('div');
-    sourceWrapper.className = 'mermaid-source-wrapper';
-    sourceWrapper.style.display = 'none';
-
-    const preClone = pre.cloneNode(true) as HTMLElement;
-    sourceWrapper.appendChild(preClone);
-
-    const errorBanner = document.createElement('div');
-    errorBanner.className = 'mermaid-error';
-    errorBanner.style.display = 'none';
-
-    card.appendChild(header);
-    card.appendChild(viewport);
-    card.appendChild(sourceWrapper);
-    card.appendChild(errorBanner);
-
-    pre.parentNode?.replaceChild(card, pre);
-
-    let showingSource = false;
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showingSource = !showingSource;
-      sourceWrapper.style.display = showingSource ? 'block' : 'none';
-      viewport.style.display = showingSource ? 'none' : 'flex';
-      toggleBtn.textContent = showingSource ? 'Diagram' : 'Code';
-    });
-
-    copySvgBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const svgEl = viewport.querySelector('svg');
-      if (svgEl) {
-        copyTextToClipboard(svgEl.outerHTML, copySvgBtn);
-      }
-    });
-
-    copyCodeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      copyTextToClipboard(mermaidCode.trim(), copyCodeBtn);
-    });
-
-    expandBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openMermaidModal(mermaidCode, viewport.innerHTML);
-    });
-
-    const svgId = `mermaid-render-${++mermaidCounter}`;
-    try {
-      const { svg } = await mermaid.render(svgId, mermaidCode);
-      viewport.innerHTML = svg;
-    } catch (err: any) {
-      errorBanner.textContent = `Mermaid syntax notice: ${err?.message || 'Rendering error'}`;
-      errorBanner.style.display = 'block';
-      sourceWrapper.style.display = 'block';
-      viewport.style.display = 'none';
-      toggleBtn.textContent = 'Diagram';
-    }
-  }
-}
-
-let modalOverlay: HTMLElement | null = null;
-let currentZoom = 1;
-let currentPanX = 0;
-let currentPanY = 0;
-
-function openMermaidModal(code: string, svgHtml: string) {
-  if (!modalOverlay) {
-    modalOverlay = document.createElement('div');
-    modalOverlay.id = 'mermaid-modal-overlay';
-    document.body.appendChild(modalOverlay);
-  }
-
-  modalOverlay.innerHTML = `
-    <div class="mermaid-modal-dialog">
-      <div class="mermaid-modal-header">
-        <div class="mermaid-modal-title">
-          <span>📊</span>
-          <span>Mermaid Diagram - Fullscreen View</span>
-        </div>
-        <div class="mermaid-modal-controls">
-          <span class="mermaid-modal-zoom-level" id="mermaid-zoom-val">100%</span>
-          <button class="mermaid-modal-btn" id="mermaid-zoom-in" title="Zoom In (+)">+</button>
-          <button class="mermaid-modal-btn" id="mermaid-zoom-out" title="Zoom Out (-)">-</button>
-          <button class="mermaid-modal-btn" id="mermaid-zoom-reset" title="Reset View (1:1)">1:1</button>
-          <button class="mermaid-modal-btn mermaid-modal-close" id="mermaid-modal-close" title="Close (Esc)">✕</button>
-        </div>
-      </div>
-      <div class="mermaid-modal-body" id="mermaid-modal-body">
-        <div class="mermaid-modal-canvas" id="mermaid-modal-canvas">
-          ${svgHtml}
-        </div>
-      </div>
-    </div>
-  `;
-
-  modalOverlay.style.display = 'flex';
-
-  const canvas = modalOverlay.querySelector('#mermaid-modal-canvas') as HTMLElement;
-  const body = modalOverlay.querySelector('#mermaid-modal-body') as HTMLElement;
-  const zoomVal = modalOverlay.querySelector('#mermaid-zoom-val') as HTMLElement;
-
-  currentZoom = 1;
-  currentPanX = 0;
-  currentPanY = 0;
-
-  function updateTransform() {
-    if (!canvas) return;
-    canvas.style.transform = `translate(${currentPanX}px, ${currentPanY}px) scale(${currentZoom})`;
-    if (zoomVal) zoomVal.textContent = `${Math.round(currentZoom * 100)}%`;
-  }
-
-  updateTransform();
-
-  modalOverlay.querySelector('#mermaid-zoom-in')?.addEventListener('click', () => {
-    currentZoom = Math.min(5, currentZoom + 0.25);
-    updateTransform();
-  });
-
-  modalOverlay.querySelector('#mermaid-zoom-out')?.addEventListener('click', () => {
-    currentZoom = Math.max(0.2, currentZoom - 0.25);
-    updateTransform();
-  });
-
-  modalOverlay.querySelector('#mermaid-zoom-reset')?.addEventListener('click', () => {
-    currentZoom = 1;
-    currentPanX = 0;
-    currentPanY = 0;
-    updateTransform();
-  });
-
-  const closeModal = () => {
-    if (modalOverlay) modalOverlay.style.display = 'none';
-    document.removeEventListener('keydown', handleKeydown);
-  };
-
-  modalOverlay.querySelector('#mermaid-modal-close')?.addEventListener('click', closeModal);
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') closeModal();
-  }
-  document.addEventListener('keydown', handleKeydown);
-
-  body?.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const delta = e.deltaY < 0 ? 0.15 : -0.15;
-    currentZoom = Math.min(5, Math.max(0.2, currentZoom + delta));
-    updateTransform();
-  }, { passive: false });
-
-  let isDragging = false;
-  let startX = 0;
-  let startY = 0;
-
-  body?.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    isDragging = true;
-    startX = e.clientX - currentPanX;
-    startY = e.clientY - currentPanY;
-    body.style.cursor = 'grabbing';
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    currentPanX = e.clientX - startX;
-    currentPanY = e.clientY - startY;
-    updateTransform();
-  });
-
-  window.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      if (body) body.style.cursor = 'grab';
-    }
-  });
 }
 
 function attachCopyButtons(container: HTMLElement) {
@@ -1776,7 +1170,7 @@ window.addEventListener('message', (event) => {
       renderPermissionPromptCard(data.promptText);
       break;
     case 'textDelta':
-      if (isUserScrolledUp) dirtyWhileScrolledUp = true;
+      if (isUserScrolledUp) setDirtyWhileScrolledUp(true);
       if (currentStreamingMessage) {
         currentStreamingMessage.text += data.delta;
         updateStreamingDOM();
@@ -1784,7 +1178,7 @@ window.addEventListener('message', (event) => {
       break;
 
     case 'thinkingDelta':
-      if (isUserScrolledUp) dirtyWhileScrolledUp = true;
+      if (isUserScrolledUp) setDirtyWhileScrolledUp(true);
       if (currentStreamingMessage) {
         currentStreamingMessage.thinking = (currentStreamingMessage.thinking || '') + data.delta;
         updateStreamingDOM();
@@ -1792,7 +1186,7 @@ window.addEventListener('message', (event) => {
       break;
 
     case 'toolCall': {
-      if (isUserScrolledUp) dirtyWhileScrolledUp = true;
+      if (isUserScrolledUp) setDirtyWhileScrolledUp(true);
       const targetMsg = currentStreamingMessage || [...messages].reverse().find(m => m.role === 'assistant');
       if (targetMsg) {
         if (!targetMsg.toolCalls) targetMsg.toolCalls = [];
@@ -1870,7 +1264,7 @@ window.addEventListener('message', (event) => {
     case 'stepComplete':
       if (currentStreamingMessage && data.usage) {
         currentStreamingMessage.tokens = data.usage;
-        saveSessionUsage(data.conversationId || activeConversationId, data.usage, currentStreamingMessage.id);
+        saveSessionUsage(data.conversationId, activeConversationId, data.usage, currentStreamingMessage.id);
         renderAll();
       }
       break;
@@ -1892,7 +1286,7 @@ window.addEventListener('message', (event) => {
         }
         if (data.usage) {
           currentStreamingMessage.tokens = data.usage;
-          saveSessionUsage(data.conversationId || activeConversationId, data.usage, currentStreamingMessage.id);
+          saveSessionUsage(data.conversationId, activeConversationId, data.usage, currentStreamingMessage.id);
         }
         currentStreamingMessage.isStreaming = false;
       }
@@ -1915,9 +1309,7 @@ window.addEventListener('message', (event) => {
     case 'fileSearchResults': {
       const match = getAtMatch();
       if (match) {
-        atFilteredFiles = data.files || [];
-        atMenuIndex = 0;
-        renderAtMenu();
+        setAtFilteredFiles(data.files || []);
       } else {
         hideAtMenu();
       }
@@ -1965,6 +1357,10 @@ window.addEventListener('message', (event) => {
       }
       break;
 
+    case 'resourceMappings':
+      resourceMappings = data.mappings || [];
+      break;
+
     case 'steeringPivot':
       break;
 
@@ -1998,7 +1394,7 @@ window.addEventListener('message', (event) => {
 
     case 'setSlashCommands':
       if (data.commands && Array.isArray(data.commands)) {
-        SLASH_COMMANDS = data.commands;
+        setSlashCommands(data.commands);
       }
       break;
 
@@ -2023,6 +1419,7 @@ window.addEventListener('message', (event) => {
     case 'sessionsList':
       if (data.workspaceInfo) {
         updateWorkspaceHeaderBadge(data.workspaceInfo);
+        if (data.workspaceInfo.name) setWorkspaceKey(data.workspaceInfo.name);
       }
       renderHistoryDropdown(data.sessions, data.currentId);
       break;
@@ -2034,6 +1431,7 @@ window.addEventListener('message', (event) => {
 
       if (data.workspaceInfo) {
         updateWorkspaceHeaderBadge(data.workspaceInfo);
+        if (data.workspaceInfo.name) setWorkspaceKey(data.workspaceInfo.name);
       }
 
       if (headerSessionTitle) {
@@ -2144,493 +1542,13 @@ if (headerSessionTitle && editHeaderTitleBtn) {
   headerSessionTitle.addEventListener('dblclick', triggerHeaderRename);
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
 
 
-let cachedSessionsList: Array<{ id: string; title: string; updatedAt: number; relativeTime: string; workspacePath?: string; workspaceName?: string; workspaceMatch?: boolean }> = [];
-
-function updateWorkspaceHeaderBadge(info?: { name: string; path: string } | null) {
-  const badge = document.getElementById('header-workspace-badge');
-  if (!badge) return;
-  if (info && info.name) {
-    badge.textContent = `📁 ${info.name}`;
-    badge.title = `Workspace: ${info.path}`;
-    badge.style.display = 'inline-flex';
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-function renderHistoryDropdown(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string; workspacePath?: string; workspaceName?: string; workspaceMatch?: boolean }>, currentId?: string | null) {
-  if (!historyDropdown) return;
-  cachedSessionsList = sessions || [];
-  renderFilteredSessions(cachedSessionsList, currentId, '');
-}
-
-function renderFilteredSessions(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string; workspacePath?: string; workspaceName?: string; workspaceMatch?: boolean }>, currentId?: string | null, searchQuery = '') {
-  if (!historyDropdown) return;
-
-  const query = searchQuery.trim().toLowerCase();
-  const filtered = query
-    ? sessions.filter(s => s.title.toLowerCase().includes(query) || s.id.toLowerCase().includes(query) || (s.workspaceName && s.workspaceName.toLowerCase().includes(query)))
-    : sessions;
-
-  let html = `
-    <div class="history-header">
-      <span>Session History</span>
-      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${filtered.length} sessions</span>
-    </div>
-    <div class="history-search-container">
-      <input type="text" id="history-search-input" placeholder="Search sessions..." value="${escapeHtml(searchQuery)}" autocomplete="off" />
-    </div>
-    <div class="history-items-list">
-  `;
-
-  if (filtered.length === 0) {
-    html += `
-      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
-        No matching sessions found for this workspace.
-      </div>
-    `;
-  } else {
-    for (const s of filtered) {
-      const isActive = currentId && currentId === s.id;
-      html += `
-        <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
-          <div class="history-item-content">
-            <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
-            <div class="history-item-meta">
-              <span class="history-item-id">${s.id.substring(0, 8)}</span>
-              <span class="history-item-time">${s.relativeTime}</span>
-            </div>
-          </div>
-          <button class="history-item-edit-btn icon-btn" title="Rename session" data-id="${s.id}">&#9999;&#65039;</button>
-        </div>
-      `;
-    }
-  }
-
-  html += `</div>`;
-  historyDropdown.innerHTML = html;
-
-  const searchInput = historyDropdown.querySelector('#history-search-input') as HTMLInputElement;
-  if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-      renderFilteredSessions(cachedSessionsList, currentId, (e.target as HTMLInputElement).value);
-    });
-    if (searchQuery) {
-      searchInput.focus();
-      searchInput.setSelectionRange(searchQuery.length, searchQuery.length);
-    }
-  }
-
-
-
-  const items = historyDropdown.querySelectorAll('.history-item');
-  items.forEach((item) => {
-    item.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.history-item-edit-btn')) {
-        return;
-      }
-      const convId = item.getAttribute('data-id');
-      if (convId) {
-        historyDropdown.style.display = 'none';
-        vscode.postMessage({ command: 'selectSession', conversationId: convId });
-      }
-    });
-  });
-
-  const editBtns = historyDropdown.querySelectorAll('.history-item-edit-btn');
-  editBtns.forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const convId = btn.getAttribute('data-id');
-      if (!convId) return;
-      const targetSession = cachedSessionsList.find(s => s.id === convId);
-      const currentTitle = targetSession ? targetSession.title : '';
-      const itemEl = btn.closest('.history-item');
-      if (!itemEl) return;
-      const titleEl = itemEl.querySelector('.history-item-title') as HTMLElement;
-      if (!titleEl) return;
-
-      const inputEl = document.createElement('input');
-      inputEl.type = 'text';
-      inputEl.className = 'history-item-rename-input';
-      inputEl.value = currentTitle;
-      titleEl.replaceWith(inputEl);
-      inputEl.focus();
-      inputEl.select();
-
-      const save = () => {
-        const newTitle = inputEl.value.trim();
-        if (newTitle && newTitle !== currentTitle) {
-          vscode.postMessage({ command: 'renameSession', conversationId: convId, title: newTitle });
-        } else {
-          inputEl.replaceWith(titleEl);
-        }
-      };
-
-      inputEl.addEventListener('blur', save);
-      inputEl.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          inputEl.blur();
-        } else if (ev.key === 'Escape') {
-          ev.preventDefault();
-          inputEl.replaceWith(titleEl);
-        }
-      });
-    });
-  });
-}
 
 if (messages.length > 0) {
   renderAll();
 }
 
-function renderPlanCard(plan: { filePath: string; timestamp: string; title: string; steps: Array<{ id: string; text: string; completed: boolean }> }): HTMLElement {
-  const isCancelled = !!(plan as any).cancelled;
-  if (isCancelled) {
-    const card = document.createElement('div');
-    card.className = 'plan-card cancelled';
-    card.innerHTML = `
-      <div class="plan-header">
-        <div class="plan-title-group">
-          <span class="plan-badge cancelled">❌ Plan Cancelled</span>
-          <span class="plan-title">${esc(plan.title || 'Plan')}</span>
-        </div>
-      </div>
-      <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
-        This implementation plan was cancelled.
-      </div>
-    `;
-    return card;
-  }
-
-  const completedCount = plan.steps.filter(s => s.completed).length;
-  const totalCount = plan.steps.length;
-  const pct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-  const isCompleted = totalCount > 0 && completedCount === totalCount;
-
-  const card = document.createElement('div');
-  card.className = `plan-card${isCompleted ? ' completed' : ' sticky'}`;
-
-  const header = document.createElement('div');
-  header.className = 'plan-header';
-
-  const titleGroup = document.createElement('div');
-  titleGroup.className = 'plan-title-group';
-
-  const badge = document.createElement('span');
-  badge.className = `plan-badge${isCompleted ? ' completed' : ''}`;
-  badge.textContent = isCompleted ? '✓ Plan Complete' : 'Plan';
-  titleGroup.appendChild(badge);
-
-  const titleEl = document.createElement('span');
-  titleEl.className = 'plan-title';
-  titleEl.textContent = plan.title || 'Implementation Plan';
-  titleGroup.appendChild(titleEl);
-
-  header.appendChild(titleGroup);
-
-  const openBtn = document.createElement('button');
-  openBtn.className = 'plan-open-btn';
-  openBtn.innerHTML = '📄 Open in Editor ↗';
-  openBtn.onclick = (e) => {
-    e.stopPropagation();
-    vscode.postMessage({ command: 'openPlanFile', filePath: plan.filePath });
-  };
-  header.appendChild(openBtn);
-  card.appendChild(header);
-
-  const progressContainer = document.createElement('div');
-  progressContainer.className = 'plan-progress-container';
-  progressContainer.innerHTML = `
-    <div class="plan-progress-bar-bg">
-      <div class="plan-progress-bar-fill" style="width: ${pct}%;"></div>
-    </div>
-    <div class="plan-progress-text">
-      <span>${completedCount} of ${totalCount} tasks completed</span>
-      <span>${pct}%</span>
-    </div>
-  `;
-  card.appendChild(progressContainer);
-
-  const checklist = document.createElement('div');
-  checklist.className = 'plan-checklist';
-
-  plan.steps.forEach((step, idx) => {
-    const item = document.createElement('div');
-    item.className = `plan-step-item${step.completed ? ' completed' : ''}`;
-
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'plan-step-checkbox';
-    cb.checked = step.completed;
-    cb.disabled = true;
-
-    const label = document.createElement('span');
-    label.className = 'plan-step-text';
-    label.textContent = step.text;
-
-    item.appendChild(cb);
-    item.appendChild(label);
-    checklist.appendChild(item);
-  });
-
-  card.appendChild(checklist);
-
-  const isApproved = !!(plan as any).isApproved;
-  if (!isApproved && !isCancelled && !isCompleted && completedCount === 0) {
-    const actions = document.createElement('div');
-    actions.className = 'plan-actions';
-
-    const approveBtn = document.createElement('button');
-    approveBtn.className = 'plan-btn plan-btn-primary';
-    approveBtn.textContent = '✓ Approve & Execute Plan';
-    approveBtn.onclick = (e) => {
-      e.stopPropagation();
-      (plan as any).isApproved = true;
-      actions.remove();
-
-      const displayUserText = `Proceeding with implementation plan (${plan.title || 'Plan'}).`;
-      const fullSystemPrompt = `[EXECUTE PLAN] Read the implementation plan at "${plan.filePath}" and immediately execute every task step-by-step using your file writing and command tools. As you complete each task, update the checklist in "${plan.filePath}" by marking '[x]'.`;
-
-      currentStreamingMessage = {
-        id: `a-${Date.now()}`,
-        role: 'assistant',
-        text: '',
-        thinking: '',
-        toolCalls: [],
-        isStreaming: true,
-      };
-      messages.push({
-        id: `u-${Date.now()}`,
-        role: 'user',
-        text: displayUserText,
-      });
-      messages.push(currentStreamingMessage);
-      renderAll(true);
-      setBusy(true);
-
-      vscode.postMessage({ command: 'userPrompt', promptText: fullSystemPrompt, images: [] });
-    };
-    actions.appendChild(approveBtn);
-
-    const modifyBtn = document.createElement('button');
-    modifyBtn.className = 'plan-btn plan-btn-secondary';
-    modifyBtn.textContent = '✏️ Modify Plan';
-    modifyBtn.onclick = (e) => {
-      e.stopPropagation();
-      actions.style.display = 'none';
-
-      const modifyForm = document.createElement('div');
-      modifyForm.className = 'plan-modify-form';
-
-      const modifyInput = document.createElement('textarea');
-      modifyInput.className = 'plan-modify-input';
-      modifyInput.rows = 2;
-      modifyInput.value = '';
-      modifyInput.placeholder = 'Describe edits to the plan... (e.g. add new feature, update layout)';
-
-      const modifyActions = document.createElement('div');
-      modifyActions.className = 'plan-modify-actions';
-
-      const submitBtn = document.createElement('button');
-      submitBtn.className = 'plan-btn plan-btn-primary';
-      submitBtn.textContent = '🚀 Submit Edits';
-
-      const cancelFormBtn = document.createElement('button');
-      cancelFormBtn.className = 'plan-btn plan-btn-secondary';
-      cancelFormBtn.textContent = 'Cancel';
-
-      const submitEdit = () => {
-        const rawText = modifyInput.value.trim();
-        if (!rawText) return;
-        modifyForm.remove();
-        
-        const text = rawText.startsWith('Edits to the plan:') ? rawText : `Edits to the plan: ${rawText}`;
-
-        messages.push({
-          id: `u-${Date.now()}`,
-          role: 'user',
-          text,
-        });
-
-        currentStreamingMessage = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text: 'Updating implementation plan...',
-          thinking: '',
-          isPlanMode: true,
-          toolCalls: [],
-          isStreaming: true,
-        };
-        messages.push(currentStreamingMessage);
-        renderAll(true);
-        setBusy(true);
-
-        vscode.postMessage({ command: 'userPrompt', promptText: text, images: [] });
-      };
-
-      submitBtn.onclick = (ev) => {
-        ev.stopPropagation();
-        submitEdit();
-      };
-
-      cancelFormBtn.onclick = (ev) => {
-        ev.stopPropagation();
-        modifyForm.remove();
-        actions.style.display = 'flex';
-      };
-
-      modifyInput.onkeydown = (ev) => {
-        if (ev.key === 'Enter' && !ev.shiftKey) {
-          ev.preventDefault();
-          submitEdit();
-        } else if (ev.key === 'Escape') {
-          ev.preventDefault();
-          modifyForm.remove();
-          actions.style.display = 'flex';
-        }
-      };
-
-      modifyActions.appendChild(submitBtn);
-      modifyActions.appendChild(cancelFormBtn);
-      modifyForm.appendChild(modifyInput);
-      modifyForm.appendChild(modifyActions);
-
-      card.appendChild(modifyForm);
-
-      setTimeout(() => {
-        modifyInput.focus();
-        const len = modifyInput.value.length;
-        modifyInput.setSelectionRange(len, len);
-        modifyForm.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      }, 50);
-    };
-    actions.appendChild(modifyBtn);
-
-    const cancelPlanBtn = document.createElement('button');
-    cancelPlanBtn.className = 'plan-btn plan-btn-secondary';
-    cancelPlanBtn.textContent = '❌ Cancel Plan';
-    cancelPlanBtn.onclick = (e) => {
-      e.stopPropagation();
-      (plan as any).cancelled = true;
-      actions.remove();
-      const inputArea = document.querySelector('.input-area') as HTMLElement;
-      if (inputArea) inputArea.style.display = '';
-      vscode.postMessage({ command: 'cancel' });
-      setBusy(false);
-      renderAll();
-    };
-    actions.appendChild(cancelPlanBtn);
-    card.appendChild(actions);
-  }
-
-  if (isApproved && !isCompleted) {
-    const execBar = document.createElement('div');
-    execBar.className = 'plan-exec-bar';
-    execBar.innerHTML = `<span class="plan-exec-status">⚡ Executing Plan Step-by-Step...</span>`;
-    
-    const cancelExecBtn = document.createElement('button');
-    cancelExecBtn.className = 'plan-btn plan-btn-secondary plan-btn-cancel-exec';
-    cancelExecBtn.textContent = '❌ Cancel Execution';
-    cancelExecBtn.onclick = (e) => {
-      e.stopPropagation();
-      (plan as any).cancelled = true;
-      vscode.postMessage({ command: 'cancel' });
-      setBusy(false);
-      renderAll();
-    };
-    execBar.appendChild(cancelExecBtn);
-    card.appendChild(execBar);
-  }
-
-  return card;
-}
-
-function renderClarificationCard(q: { question: string; options?: string[]; isMultiSelect?: boolean }): HTMLElement {
-  const card = document.createElement('div');
-  card.className = 'clarification-card';
-
-  const title = document.createElement('div');
-  title.className = 'clarification-title';
-  title.innerHTML = `<span>❓ Clarification Required:</span> ${esc(q.question)}`;
-  card.appendChild(title);
-
-  const optionsContainer = document.createElement('div');
-  optionsContainer.className = 'clarification-options';
-
-  const inputType = q.isMultiSelect ? 'checkbox' : 'radio';
-  const groupName = `clarification_${Date.now()}`;
-
-  if (q.options && q.options.length > 0) {
-    q.options.forEach((optText) => {
-      const label = document.createElement('label');
-      label.className = 'clarification-option-label';
-
-      const optInput = document.createElement('input');
-      optInput.type = inputType;
-      optInput.name = groupName;
-      optInput.value = optText;
-
-      const txt = document.createElement('span');
-      txt.textContent = optText;
-
-      label.appendChild(optInput);
-      label.appendChild(txt);
-      optionsContainer.appendChild(label);
-    });
-  }
-
-  card.appendChild(optionsContainer);
-
-  const customInput = document.createElement('input');
-  customInput.type = 'text';
-  customInput.className = 'clarification-input';
-  customInput.placeholder = 'Or type custom guidance / additional instructions...';
-  card.appendChild(customInput);
-
-  const actions = document.createElement('div');
-  actions.className = 'plan-actions';
-
-  const submitBtn = document.createElement('button');
-  submitBtn.className = 'plan-btn plan-btn-primary';
-  submitBtn.textContent = 'Submit Response';
-  submitBtn.onclick = (e) => {
-    e.stopPropagation();
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitted...';
-
-    const checkedInputs = optionsContainer.querySelectorAll('input:checked');
-    const answers: string[] = [];
-    checkedInputs.forEach((el: any) => answers.push(el.value));
-
-    const customText = customInput.value.trim();
-    if (customText) answers.push(`Custom: ${customText}`);
-
-    const responseMsg = answers.length > 0 ? `Selected choices: ${answers.join(' | ')}` : 'Proceed with default options.';
-
-    if (input) {
-      input.value = responseMsg;
-      const form = input.closest('form') || input.parentElement;
-      if (form) form.dispatchEvent(new Event('submit', { cancelable: true }));
-    }
-  };
-  actions.appendChild(submitBtn);
-
-  card.appendChild(actions);
-
-  return card;
-}
 
 vscode.postMessage({ command: 'ready' });
 

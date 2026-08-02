@@ -57,6 +57,7 @@ export function renderToolCallCard(
 
   let hasContent = false;
 
+  const targetFile = extractTargetFile(tc.name, tc.args, tc.result);
   const diffStr = buildDiffFromToolArgs(tc.name, tc.args, tc.result);
   if (diffStr) {
     hasContent = true;
@@ -71,7 +72,6 @@ export function renderToolCallCard(
     title.textContent = 'Changes (Diff)';
     diffHeader.appendChild(title);
 
-    const targetFile = extractTargetFile(tc.name, tc.args, tc.result);
     if (targetFile) {
       const openDiffBtn = document.createElement('button');
       openDiffBtn.className = 'open-diff-btn';
@@ -113,6 +113,26 @@ export function renderToolCallCard(
     pre.textContent = formatted;
     argsBlock.appendChild(pre);
     bodyInner.appendChild(argsBlock);
+  }
+
+  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
+  const readTools = ['readfile', 'read_file', 'viewfile', 'view_file'];
+  const tcNameLower = (tc.name || '').toLowerCase().replace(/[^a-z]/g, '');
+  const isImageRead = readTools.some(t => t.replace(/[^a-z]/g, '') === tcNameLower) && targetFile && imageExts.some(ext => targetFile.toLowerCase().endsWith(ext));
+  if (isImageRead && targetFile) {
+    hasContent = true;
+    const imgBlock = document.createElement('div');
+    imgBlock.className = 'tool-image-preview';
+    const img = document.createElement('img');
+    img.src = targetFile;
+    img.alt = targetFile.split(/[/\\]/).pop() || 'Image';
+    img.className = 'tool-image-inline';
+    img.onclick = (e) => {
+      e.stopPropagation();
+      postMessage({ command: 'openFile', filePath: targetFile });
+    };
+    imgBlock.appendChild(img);
+    bodyInner.appendChild(imgBlock);
   }
 
   const resultText = extractStringResult(tc.result);

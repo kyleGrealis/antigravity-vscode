@@ -39,7 +39,9 @@ export function toPascalCaseName(name: string): string {
 export function getArgVal(obj: any, ...keys: string[]): any {
   if (!obj || typeof obj !== 'object') return undefined;
   for (const k of keys) {
-    if (obj[k] !== undefined && obj[k] !== null) return cleanValue(obj[k]);
+    if (obj[k] !== undefined && obj[k] !== null) {
+      return typeof obj[k] === 'string' ? cleanValue(obj[k]) : obj[k];
+    }
   }
   const lowerMap: Record<string, any> = {};
   for (const k of Object.keys(obj)) {
@@ -47,7 +49,9 @@ export function getArgVal(obj: any, ...keys: string[]): any {
   }
   for (const k of keys) {
     const lk = k.toLowerCase();
-    if (lowerMap[lk] !== undefined && lowerMap[lk] !== null) return cleanValue(lowerMap[lk]);
+    if (lowerMap[lk] !== undefined && lowerMap[lk] !== null) {
+      return typeof lowerMap[lk] === 'string' ? cleanValue(lowerMap[lk]) : lowerMap[lk];
+    }
   }
   return undefined;
 }

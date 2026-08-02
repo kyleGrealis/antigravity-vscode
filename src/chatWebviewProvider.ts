@@ -6,7 +6,7 @@ import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
 import { loadSkills } from './skillManager';
-import { PlanManager } from './planManager';
+import { toForwardSlash, normalizePath, normalizePathLower, isInsidePath } from './pathUtils';
 
 function formatPermissionError(res: any): any {
   if (typeof res !== 'string') return res;
@@ -78,7 +78,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
   private isSteeringPivot = false;
-  private readonly planManager: PlanManager = new PlanManager();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -154,13 +153,14 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this.extensionUri, vscode.Uri.file(os.tmpdir())],
+      localResourceRoots: this.getResourceRoots(),
     };
 
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
     this.setupWebviewMessageListeners(webviewView.webview);
     this.sendSlashCommands(webviewView.webview);
     this.sendConfigUpdate(webviewView.webview);
+    this.sendResourceMappings(webviewView.webview);
   }
 
   public createOrShowPanel(): vscode.WebviewPanel {
@@ -175,7 +175,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       vscode.ViewColumn.One,
       {
         enableScripts: true,
-        localResourceRoots: [this.extensionUri, vscode.Uri.file(os.tmpdir())],
+        localResourceRoots: this.getResourceRoots(),
         retainContextWhenHidden: true,
       }
     );
@@ -184,6 +184,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     panel.webview.html = this.getHtmlForWebview(panel.webview);
     this.setupWebviewMessageListeners(panel.webview);
     this.sendSlashCommands(panel.webview);
+    this.sendResourceMappings(panel.webview);
 
     panel.onDidDispose(() => {
       this.currentPanel = undefined;
@@ -478,27 +479,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           }
           break;
 
-        case 'openPlanFile':
-          if (message.filePath) {
-            this.planManager.openPlanInEditor(message.filePath);
-          } else {
-            const cwd = this.resolveWorkingDirectory();
-            const planPath = path.join(cwd, '.antigravity', 'plan.md');
-            this.planManager.openPlanInEditor(planPath);
-          }
-          break;
-
-        case 'createPlan': {
-          const cwd = this.resolveWorkingDirectory();
-          const convId = this.processManager.getConversationId() || '';
-          const planData = this.planManager.createPlan(cwd, convId, message.title || 'Feature Plan', message.steps || []);
-          this.getWebviews().forEach(wv => wv.postMessage({ type: 'planCreated', plan: planData }));
-          break;
-        }
-
-        case 'togglePlanStep': {
-          if (message.filePath && message.stepIndex !== undefined) {
-            this.planManager.updateStepStatus(message.filePath, message.stepIndex, message.completed);
+        case 'openPlanFile': {
+          const filePath = message.filePath;
+          if (filePath && fs.existsSync(filePath)) {
+            vscode.workspace.openTextDocument(vscode.Uri.file(filePath)).then(doc =>
+              vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true })
+            );
           }
           break;
         }
@@ -531,7 +517,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         fs.mkdirSync(saveDir, { recursive: true });
       }
 
-      const filePath = path.join(saveDir, `agy_paste_${Date.now()}.${ext}`).replace(/\\/g, '/');
+      const filePath = toForwardSlash(path.join(saveDir, `agy_paste_${Date.now()}.${ext}`));
       fs.writeFileSync(filePath, buffer);
       webview.postMessage({ type: 'imagesAttached', paths: [filePath] });
     } catch (err) {
@@ -600,7 +586,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     if (images && images.length > 0) {
-      const imageList = images.map((img) => `- ${path.resolve(img).replace(/\\/g, '/')}`).join('\n');
+      const imageList = images.map((img) => `- ${normalizePath(img)}`).join('\n');
       parts.push(
         `[ATTACHED IMAGES]\nThe user attached the following image file(s):\n${imageList}\n\nIMPORTANT: You MUST call your \`view_file\` tool on the attached image file path(s) to inspect and view the image content before responding.`
       );
@@ -706,12 +692,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
     if (name === 'plan') {
       const title = arg ? arg.trim() : 'Feature Plan';
-      const now = new Date();
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const timestampStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      const planFilePath = `.antigravity/plans/PLAN-${timestampStr}.md`;
 
-      const planPrompt = `[PLAN MODE] Analyze the following feature request: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed before finalizing. Then write the implementation plan to "${planFilePath}" formatted with markdown checkboxes '- [ ] task description'. Include all necessary steps for the task regardless of count (whether 2 or 15+ steps); do not artificially limit or pad step count.`;
+      const planPrompt = `[PLAN MODE] Analyze the following feature request: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed before finalizing. Then write an implementation plan as a markdown file with a "# " title header and markdown checkboxes formatted as '- [ ] task description'. Include all necessary steps for the task regardless of count (whether 2 or 15+ steps); do not artificially limit or pad step count.`;
       this.onUserPrompt(planPrompt, []);
       return;
     }
@@ -774,7 +756,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       this.saveSessionWorkspace(currentConvId, cwd);
     }
 
-    const normalizedImages = images?.map((img) => img.replace(/\\/g, '/'));
+    const normalizedImages = images?.map((img) => toForwardSlash(img));
     const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
 
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
@@ -794,7 +776,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
     if (process.platform === 'linux' && cwd.match(/^[a-zA-Z]:/)) {
       const drive = cwd[0].toLowerCase();
-      cwd = `/mnt/${drive}/${cwd.slice(3).replace(/\\/g, '/')}`;
+      cwd = `/mnt/${drive}/${toForwardSlash(cwd.slice(3))}`;
     }
 
     return cwd;
@@ -894,12 +876,104 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
 
         let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args || (step.tool_calls && step.tool_calls[0] ? (step.tool_calls[0].args || step.tool_calls[0].tool_args) : undefined);
+
         let toolArgs = cleanToolArgs(rawArgs);
+
+        const editToolNames = ['replace_file_content', 'multi_replace_file_content', 'write_to_file', 'write_file', 'create_file', 'code_action'];
+        const isEditTool = editToolNames.includes(toolName);
+        const targetFile = toolArgs?.TargetFile || toolArgs?.targetFile || toolArgs?.target_file ||
+                           toolArgs?.AbsolutePath || toolArgs?.absolutePath || toolArgs?.path || toolArgs?.file ||
+                           toolArgs?.FilePath || toolArgs?.filePath;
+
+        if (!this.debugChannel) {
+          this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
+        }
+
+        const fs = require('fs');
+        const { execSync } = require('child_process');
+        let computedDiff: string | undefined;
+
+        if (isEditTool && targetFile && (step.state === 'DONE' || step.state === 'SUCCESS')) {
+          const cwd = this.resolveWorkingDirectory();
+          const fwdFile = targetFile.replace(/\\/g, '/');
+          const fileName = fwdFile.split('/').pop() || 'file';
+
+          try {
+            const afterContent = fs.readFileSync(targetFile, 'utf-8');
+            const prevSnapshot = this.fileSnapshots.get(targetFile);
+
+            if (prevSnapshot !== undefined) {
+              if (prevSnapshot !== afterContent) {
+                const tmpBefore = require('path').join(require('os').tmpdir(), `agy-diff-before-${Date.now()}.tmp`);
+                try {
+                  fs.writeFileSync(tmpBefore, prevSnapshot);
+                  const raw = execSync(`git diff --no-index -- "${tmpBefore}" "${targetFile}"`, { encoding: 'utf-8', timeout: 5000 });
+                  if (raw && raw.trim()) computedDiff = raw.trim();
+                } catch (diffErr: any) {
+                  if (diffErr.stdout && diffErr.stdout.trim()) computedDiff = diffErr.stdout.trim();
+                } finally {
+                  try { fs.unlinkSync(tmpBefore); } catch {}
+                }
+                if (computedDiff) {
+                  const hunkIdx = computedDiff.indexOf('\n@@');
+                  if (hunkIdx !== -1) {
+                    computedDiff = `diff --git a/${fileName} b/${fileName}\n--- a/${fileName}\n+++ b/${fileName}` + computedDiff.substring(hunkIdx);
+                  }
+                }
+                this.debugChannel.appendLine(`[DIFF] snapshot-based diff for ${targetFile}`);
+              }
+            } else {
+              let beforeContent: string | null = null;
+              const isInsideWorkspace = isInsidePath(targetFile, cwd);
+              if (isInsideWorkspace) {
+                try {
+                  const relPath = require('path').relative(cwd, targetFile).replace(/\\/g, '/');
+                  beforeContent = execSync(`git show HEAD:"${relPath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
+                } catch {}
+              }
+              if (beforeContent !== null && beforeContent !== afterContent) {
+                const tmpBefore = require('path').join(require('os').tmpdir(), `agy-diff-before-${Date.now()}.tmp`);
+                try {
+                  fs.writeFileSync(tmpBefore, beforeContent);
+                  const raw = execSync(`git diff --no-index -- "${tmpBefore}" "${targetFile}"`, { encoding: 'utf-8', timeout: 5000 });
+                  if (raw && raw.trim()) computedDiff = raw.trim();
+                } catch (diffErr: any) {
+                  if (diffErr.stdout && diffErr.stdout.trim()) computedDiff = diffErr.stdout.trim();
+                } finally {
+                  try { fs.unlinkSync(tmpBefore); } catch {}
+                }
+                if (computedDiff) {
+                  const hunkIdx = computedDiff.indexOf('\n@@');
+                  if (hunkIdx !== -1) {
+                    computedDiff = `diff --git a/${fileName} b/${fileName}\n--- a/${fileName}\n+++ b/${fileName}` + computedDiff.substring(hunkIdx);
+                  }
+                }
+                this.debugChannel.appendLine(`[DIFF] git-based diff for ${targetFile}`);
+              } else if (beforeContent === null) {
+                const lines = afterContent.split('\n');
+                computedDiff = [
+                  `--- /dev/null`,
+                  `+++ b/${fileName}`,
+                  `@@ -0,0 +1,${lines.length} @@ new file`,
+                  ...lines.map((l: string) => `+${l}`)
+                ].join('\n');
+                this.debugChannel.appendLine(`[DIFF] new-file diff for ${targetFile} (${lines.length} lines)`);
+              }
+            }
+
+            this.fileSnapshots.set(targetFile, afterContent);
+          } catch (e: any) {
+            this.debugChannel.appendLine(`[DIFF] error=${e.message}`);
+          }
+        }
 
         let rawError = toolInfo.error || step.error;
         let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
 
         let toolResult = toolInfo.output || toolInfo.result || toolInfo.content || toolInfo.text || toolInfo.response || toolInfo.diff || toolInfo.changes || step.content || step.output || step.result || step.text || step.diff || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
+        if (computedDiff) {
+          toolResult = computedDiff;
+        }
         toolResult = formatPermissionError(toolResult);
 
         const isGenericName = !toolName || ['tool', 'tool_call', 'tool_use', 'tool execution', 'tool_execution'].includes(toolName);
@@ -909,12 +983,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
           let toolId = step.tool_call_id || step.call_id || step.id;
           if (!toolId && step.step_index !== undefined) {
-            if (stepType === 'code_action' || stepType === 'cortex_step_type_code_action') {
-              const prevIndex = Math.max(0, step.step_index - 1);
-              toolId = `step_${prevIndex}_0`;
-            } else {
-              toolId = `step_${step.step_index}_0`;
-            }
+            toolId = `step_${step.step_index}_0`;
           }
           if (!toolId) toolId = toolName;
 
@@ -944,6 +1013,24 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             delta: textDelta,
           })
         );
+      }
+
+      if (step.state === 'DONE' || step.state === 'SUCCESS') {
+        const writeToolNorms = new Set(['writetofile', 'writefile', 'createfile', 'replacefilecontent', 'multireplacefilecontent']);
+        const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+        const allToolNames: string[] = [];
+        if (toolNameRaw) allToolNames.push(norm(toolNameRaw.replace(/^(cortex_step_type_|step_type_)/i, '')));
+        if (stepType) allToolNames.push(norm(stepType.replace(/^(cortex_step_type_|step_type_)/i, '')));
+        if (step.tool_info?.name) allToolNames.push(norm(step.tool_info.name));
+        if (Array.isArray(step.tool_calls)) {
+          step.tool_calls.forEach((tc: any) => {
+            const n = tc.name || tc.tool_name || tc.function?.name || '';
+            if (n) allToolNames.push(norm(n));
+          });
+        }
+        if (allToolNames.some(n => writeToolNorms.has(n))) {
+          this.detectPlanFromToolCall(step, allToolNames[0]);
+        }
       }
 
       if (step.state === 'DONE' && step.usage) {
@@ -1010,51 +1097,142 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private setupPlanFileWatcher() {
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*plan*.md');
-    const handlePlanFile = (uri: vscode.Uri) => {
-      try {
-        const filePath = uri.fsPath;
-        if (!fs.existsSync(filePath)) return;
-        const content = fs.readFileSync(filePath, 'utf-8');
-        
-        const lines = content.split('\n');
-        let title = path.basename(filePath);
-        const titleMatch = content.match(/^# (?:Feature Implementation Plan:)?\s*(.+)$/m);
-        if (titleMatch) title = titleMatch[1].trim();
+  private activePlanFilePath: string | null = null;
+  private debugChannel: vscode.OutputChannel | null = null;
+  private fileSnapshots: Map<string, string> = new Map();
 
-        const steps: Array<{ id: string; text: string; completed: boolean }> = [];
-        lines.forEach((line, idx) => {
-          const match = line.match(/^- \[(x|X| )\]\s*(.+)$/);
-          if (match) {
-            steps.push({
-              id: `step-${idx + 1}`,
-              text: match[2].trim(),
-              completed: match[1].toLowerCase() === 'x',
-            });
-          }
+  private sendResourceMappings(webview: vscode.Webview) {
+    const mappings: Array<{ prefix: string; base: string }> = [];
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (wsFolders) {
+      for (const f of wsFolders) {
+        mappings.push({
+          prefix: f.uri.fsPath,
+          base: webview.asWebviewUri(f.uri).toString(),
         });
+      }
+    }
+    const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+    if (fs.existsSync(brainDir)) {
+      mappings.push({
+        prefix: brainDir,
+        base: webview.asWebviewUri(vscode.Uri.file(brainDir)).toString(),
+      });
+    }
+    const tmpDir = os.tmpdir();
+    mappings.push({
+      prefix: tmpDir,
+      base: webview.asWebviewUri(vscode.Uri.file(tmpDir)).toString(),
+    });
+    webview.postMessage({ type: 'resourceMappings', mappings });
+  }
 
-        this.planManager.openPlanInEditor(filePath);
+  private getResourceRoots(): vscode.Uri[] {
+    const roots: vscode.Uri[] = [this.extensionUri, vscode.Uri.file(os.tmpdir())];
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (wsFolders) {
+      roots.push(...wsFolders.map(f => f.uri));
+    }
+    const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+    if (fs.existsSync(brainDir)) {
+      roots.push(vscode.Uri.file(brainDir));
+    }
+    return roots;
+  }
 
-        if (steps.length > 0) {
+  private parsePlanFromContent(filePath: string, content: string): { title: string; steps: Array<{ id: string; text: string; completed: boolean }> } | null {
+    const lines = content.split('\n');
+    const steps: Array<{ id: string; text: string; completed: boolean }> = [];
+
+    lines.forEach((line, idx) => {
+      const match = line.match(/^- \[(x|X| )\]\s*(.+)$/);
+      if (match) {
+        steps.push({
+          id: `step-${idx + 1}`,
+          text: match[2].trim(),
+          completed: match[1].toLowerCase() === 'x',
+        });
+      }
+    });
+
+    if (steps.length === 0) return null;
+
+    let title = path.basename(filePath, '.md');
+    const titleMatch = content.match(/^#\s+(?:(?:Implementation|Feature)\s+Plan[:\s]*)?(.+)$/m);
+    if (titleMatch) title = titleMatch[1].trim();
+
+    return { title, steps };
+  }
+
+  private detectPlanFromToolCall(step: any, toolName: string) {
+    try {
+      const toolArgs = step.tool_info?.parameters || step.tool_args || step.args || step.input || step.parameters || {};
+      const parsed = typeof toolArgs === 'string' ? JSON.parse(toolArgs) : toolArgs;
+      const targetFile = parsed?.TargetFile || parsed?.targetFile || parsed?.target_file ||
+                         parsed?.AbsolutePath || parsed?.absolutePath || parsed?.path || parsed?.file ||
+                         parsed?.FilePath || parsed?.filePath;
+
+      if (!targetFile || !targetFile.endsWith('.md')) return;
+
+      setTimeout(() => {
+        try {
+          const resolvedPath = path.isAbsolute(targetFile) ? targetFile : path.resolve(this.resolveWorkingDirectory(), targetFile);
+          if (!fs.existsSync(resolvedPath)) return;
+
+          const content = fs.readFileSync(resolvedPath, 'utf-8');
+          const plan = this.parsePlanFromContent(resolvedPath, content);
+          if (!plan) return;
+
+          this.activePlanFilePath = resolvedPath;
           const planData = {
-            filePath,
+            filePath: resolvedPath,
             timestamp: new Date().toISOString(),
-            title,
-            steps,
+            title: plan.title,
+            steps: plan.steps,
           };
           this.getWebviews().forEach((wv) =>
             wv.postMessage({ type: 'planCreated', plan: planData })
           );
+        } catch (err) {
+          console.error('Failed to detect plan from tool call:', err);
         }
+      }, 200);
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  private setupPlanFileWatcher() {
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*plan*.md');
+
+    const handlePlanFileChange = (uri: vscode.Uri) => {
+      try {
+        const filePath = uri.fsPath;
+        if (!fs.existsSync(filePath)) return;
+
+        if (this.activePlanFilePath && normalizePath(filePath) !== normalizePath(this.activePlanFilePath)) {
+          return;
+        }
+
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const plan = this.parsePlanFromContent(filePath, content);
+        if (!plan) return;
+
+        const planData = {
+          filePath,
+          timestamp: new Date().toISOString(),
+          title: plan.title,
+          steps: plan.steps,
+        };
+        this.getWebviews().forEach((wv) =>
+          wv.postMessage({ type: 'planCreated', plan: planData })
+        );
       } catch (err) {
-        console.error('Failed to parse created plan file:', err);
+        console.error('Failed to parse plan file change:', err);
       }
     };
 
-    watcher.onDidCreate(handlePlanFile);
-    watcher.onDidChange(handlePlanFile);
+    watcher.onDidChange(handlePlanFileChange);
   }
 
   private async handleSearchFiles(query: string, webview: vscode.Webview) {
@@ -1240,11 +1418,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   private normalizeWorkspacePath(dirPath: string): string {
     if (!dirPath) return '';
-    let norm = path.resolve(dirPath).replace(/\\/g, '/');
-    if (norm.length > 1 && norm.endsWith('/')) {
-      norm = norm.slice(0, -1);
-    }
-    return norm.toLowerCase();
+    return normalizePathLower(dirPath);
   }
 
   private getSessionWorkspace(convId: string, convDir: string): { workspacePath?: string; workspaceName?: string } {
@@ -1253,10 +1427,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       if (fs.existsSync(metaPath)) {
         const content = fs.readFileSync(metaPath, 'utf-8');
         const parsed = JSON.parse(content);
-        if (parsed.workspacePath) {
+        const wp = parsed.workspacePath;
+        const looksValid = wp && wp.length > 3 && (/^[A-Za-z]:/.test(wp) || wp.startsWith('/'));
+        if (looksValid) {
           return {
-            workspacePath: parsed.workspacePath,
-            workspaceName: parsed.workspaceName || path.basename(parsed.workspacePath),
+            workspacePath: wp,
+            workspaceName: parsed.workspaceName || path.basename(wp),
           };
         }
       }
@@ -1270,36 +1446,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       const targetPath = fs.existsSync(transcriptPath) ? transcriptPath : (fs.existsSync(altLogPath) ? altLogPath : null);
       if (targetPath) {
         const content = fs.readFileSync(targetPath, 'utf-8');
-        // Match [URI] -> [CorpusName] mapping first
-        const matchUri = content.match(/([\/A-Za-z0-9_\-\.\:\\]+)\s*->\s*[^\s<]+/);
-        if (matchUri && matchUri[1] && !matchUri[1].includes('tmp')) {
-          const wPath = matchUri[1].trim();
-          this.saveSessionWorkspace(convId, wPath);
-          return {
-            workspacePath: wPath,
-            workspaceName: path.basename(wPath),
-          };
-        }
-
-        // Match Cwd or TargetFile / AbsolutePath in tool args
-        const matchDev = content.match(/\/home\/kyle\/dev\/([a-zA-Z0-9_\-\.]+)/);
-        if (matchDev && matchDev[1]) {
-          const wPath = `/home/kyle/dev/${matchDev[1]}`;
-          this.saveSessionWorkspace(convId, wPath);
-          return {
-            workspacePath: wPath,
-            workspaceName: matchDev[1],
-          };
-        }
 
         const matchCwd = content.match(/"Cwd"\s*:\s*"([^"]+)"/);
         if (matchCwd && matchCwd[1]) {
-          const cleanCwd = matchCwd[1].replace(/\\"/g, '"').replace(/^"/, '').replace(/"$/, '').replace(/\\\\/g, '/');
-          if (cleanCwd && cleanCwd !== '\\' && cleanCwd !== '/') {
+          const cleanCwd = matchCwd[1].replace(/\\\\/g, '/').replace(/\\"/g, '"');
+          if (cleanCwd.length > 3 && (cleanCwd.match(/^[A-Za-z]:/) || cleanCwd.startsWith('/'))) {
             this.saveSessionWorkspace(convId, cleanCwd);
             return {
               workspacePath: cleanCwd,
               workspaceName: path.basename(cleanCwd),
+            };
+          }
+        }
+
+        const matchAbsPath = content.match(/(?:\/home\/\w+\/[\w\-\.\/]+|[A-Za-z]:[\\\/][\w\-\.\\\/]+)/);
+        if (matchAbsPath && matchAbsPath[0].length > 5) {
+          const wPath = matchAbsPath[0].replace(/\\\\/g, '/');
+          const wDir = wPath.replace(/\/[^\/]+\.[^\/]+$/, '');
+          if (wDir.length > 3) {
+            this.saveSessionWorkspace(convId, wDir);
+            return {
+              workspacePath: wDir,
+              workspaceName: path.basename(wDir),
             };
           }
         }
@@ -1312,7 +1480,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private saveSessionWorkspace(convId: string, workspacePath: string): void {
-    if (!convId || !workspacePath) return;
+    if (!convId || !workspacePath || workspacePath.length < 4) return;
+    const looksAbsolute = /^[A-Za-z]:/.test(workspacePath) || workspacePath.startsWith('/');
+    if (!looksAbsolute) return;
     try {
       const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
       const sysDir = path.join(brainDir, convId, '.system_generated');
@@ -1424,9 +1594,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 				<img src="${logoUri}" class="header-logo" alt="Antigravity" />
 				<span id="header-session-title" class="header-title" title="Double click to rename session">Untitled</span>
 				<button id="edit-header-title-btn" class="icon-btn edit-title-btn" title="Rename session">&#9999;&#65039;</button>
-				<span id="header-workspace-badge" class="header-workspace-badge" style="display: none;"></span>
 			</div>
 			<div class="header-actions">
+				<span id="header-workspace-badge" class="header-workspace-badge" style="display: none;"></span>
 				<button id="history-btn" class="icon-btn" title="Session History">&#128340;</button>
 				<button id="new-chat-btn" class="icon-btn" title="New conversation">+</button>
 			</div>
@@ -1463,28 +1633,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 		</div>
 
 		<div class="input-area">
-			<div id="input-context-header" class="input-context-header">
-				<span id="context-hint" class="context-hint">Use @ to mention files or / for commands</span>
-				<div id="context-bar" class="context-bar" style="display: none;">
-					<span id="active-file-context" class="context-chip"></span>
-				</div>
-			</div>
 			<div class="input-row">
 				<div id="slash-menu" class="slash-menu" style="display: none;"></div>
 				<div id="at-menu" class="at-menu" style="display: none;"></div>
 				<div class="prompt-box-container">
+					<div id="input-context-header" class="input-context-header">
+						<span id="context-hint" class="context-hint">Use @ to mention files or / for commands</span>
+						<div id="context-bar" class="context-bar" style="display: none;">
+							<span id="active-file-context" class="context-chip"></span>
+						</div>
+					</div>
 					<div id="image-attachment-bar" class="image-attachment-bar" style="display: none;"></div>
 					<textarea id="prompt-input" rows="1" placeholder="Ask Antigravity or describe a task..."></textarea>
-				</div>
-			</div>
-			<div class="input-footer">
-				<span id="status-text" class="input-hint status-indicator">enter to send, shift+enter for newline</span>
-				<div class="input-actions">
-					<span id="mode-text" class="mode-text" style="display: none;"></span>
-					<span id="sandbox-text" class="mode-text mode-sandbox" style="display: none;"></span>
-					<button id="attach-img-btn" class="icon-btn attach-btn" title="Attach Image">&#128206;</button>
-					<button id="cancel-btn" class="text-btn cancel-btn" style="display: none;">cancel</button>
-					<button id="send-btn" class="text-btn send-btn">send</button>
+					<div class="input-footer">
+						<span id="status-text" class="input-hint status-indicator">enter to send, shift+enter for newline</span>
+						<div class="input-actions">
+							<span id="mode-text" class="mode-text" style="display: none;"></span>
+							<span id="sandbox-text" class="mode-text mode-sandbox" style="display: none;"></span>
+							<button id="attach-img-btn" class="icon-btn attach-btn" title="Attach Image">&#128206;</button>
+							<button id="cancel-btn" class="text-btn cancel-btn" style="display: none;">cancel</button>
+							<button id="send-btn" class="text-btn send-btn">send</button>
+						</div>
+					</div>
 				</div>
 			</div>
 		</div>

@@ -1,25 +1,32 @@
-# News / Release Notes
+# Release Notes
 
-## Unreleased (Work in Progress)
+## antigravity-vscode 0.1.6
 
-- **Interactive Mermaid Diagrams**: Auto-renders ````mermaid```` code blocks into theme-adaptive SVG diagrams with Code/Diagram toggle, Copy SVG, Copy Code, and Fullscreen Pan & Zoom modal.
-- **Instant Mid-Turn Steering**: Submit prompts while an agent turn is active to provide live guidance without interrupting session state or resetting UI.
-- **Unified Git Diff Cards**: Re-usable syntax-highlighted git diff cards for file modifications (`ReplaceFileContent`, `multi_replace_file_content`, `write_to_file`) with context lines and side-by-side editor diff button (`Compare in Editor ↗`). *(Note: Full syntax-highlighted diffs render automatically upon window/session reload; live streaming card polish is ongoing.)*
-- **Strict Workspace Session Isolation**: Scoped chat sessions and history picker strictly to active workspace directory, preventing cross-project conversation leakage.
+- **Plan Mode overhaul**: Full lifecycle plan cards with approve, modify, cancel, and real-time checkbox sync during execution. Contextual prompt box states throughout the plan workflow.
+- **`/plan` anywhere in prompt**: `/plan` no longer needs to be the first word. Write naturally and include `/plan` wherever it fits.
+- **Tool call interception**: Plan detection works by intercepting CLI `WriteToFile` events and parsing for markdown checklists, so plans written to the CLI brain directory are picked up automatically.
+- **Modular webview codebase**: Extracted 7 controller modules from the monolithic `main.ts` (slash menu, scroll manager, usage tracker, session history, plan card, at-menu, mermaid modal).
+- **Workspace-scoped git diffs**: Diff previews now skip files outside the repo instead of throwing errors.
+- **Debug channel singleton**: Fixed OutputChannel leak that created a new channel on every tool event.
+- **Removed dead PlanManager**: Replaced the old `.antigravity/plans/` file-writing approach with tool call interception.
 
 ## antigravity-vscode 0.1.5
 
-- **Execution Mode Selector**: Cycle execution modes (`Default`, `plan`, `auto accept`) via `Shift+Tab` with live status indicators.
-- **Slash Commands & Control Suite**: Added `/sandbox`, `/dangerous`, `/plan`, `/usage`, `/settings`, and `/help` slash command controls.
-- **Token Usage Overlay (`/usage`)**: Added floating modal overlay for session token metrics and per-turn breakdown.
+- **Execution mode selector**: Cycle modes (`Default`, `plan`, `auto accept`) via `Shift+Tab` with live status badges.
+- **Slash command suite**: `/sandbox`, `/dangerous`, `/plan`, `/usage`, `/settings`, `/help`.
+- **Token usage overlay**: Floating modal for session token metrics and per-turn breakdown.
+- **Smart auto-scroll lock**: Scroll position preserved during active streaming.
+- **Live diff previews**: Streaming diff cards for file modifications with `Compare in Editor` button.
 
 ## antigravity-vscode 0.1.4
 
-- **Interactive Plan Mode**: Dedicated planning interface with inline review & modification forms, execution progress tracking, and clarification cards.
-- **Empty State Welcome Screen**: Centered hero vector logo and interactive prompt suggestion cards grid.
-- **Tool Card & History Polish**: Formatted command code blocks for tool execution cards, transcript history linking, and case-insensitive `@` file mentions.
+- **Interactive plan mode**: Planning interface with inline review, modification forms, and progress tracking.
+- **Welcome screen**: Hero logo and interactive suggestion cards.
+- **Mermaid diagrams**: Theme-adaptive SVG rendering with fullscreen zoom.
+- **Workspace session isolation**: Sessions filtered by active workspace directory.
 
 ## antigravity-vscode 0.1.3
 
-- **Session Management**: Added inline session renaming in history dropdown and main header title bar with real-time search filtering.
-- **Session Persistence**: Automatic session restoration and state synchronization across editor reloads.
+- **Session management**: Inline renaming, search filtering, and automatic state restoration.
+- **`@` file mentions**: Case-insensitive workspace file autocomplete.
+- **Mid-turn steering**: Send prompts while the agent is active.

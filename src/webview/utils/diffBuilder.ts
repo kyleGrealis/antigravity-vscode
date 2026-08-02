@@ -82,25 +82,7 @@ export function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?
 
   const resultStr = extractStringResult(rawResult);
 
-  // 1. Try extracting diff from resultStr if present
-  if (resultStr) {
-    const diffBlockMatch = resultStr.match(/\[diff_block_start\]([\s\S]*?)\[diff_block_end\]/);
-    if (diffBlockMatch && diffBlockMatch[1].trim()) {
-      let rawDiff = diffBlockMatch[1].trim();
-      if (!rawDiff.includes('--- ') && !rawDiff.includes('+++ ')) {
-        const args = parseJsonArgs(rawArgs);
-        const file = getArgVal(args, 'TargetFile', 'targetFile', 'target_file', 'path', 'file', 'AbsolutePath', 'absolutePath', 'FilePath', 'filePath') || extractTargetFile(toolName, rawArgs, rawResult) || '';
-        const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
-        rawDiff = `--- a/${fileName}\n+++ b/${fileName}\n${rawDiff}`;
-      }
-      return rawDiff;
-    }
-    if (isDiffText(resultStr)) {
-      return resultStr.trim();
-    }
-  }
-
-  // 2. Build diff from args object or fallback string parsing
+  // 1. Try building from structured args first (produces cleaner output)
   let args = parseJsonArgs(rawArgs);
   let diffLines: string[] = [];
 
@@ -173,6 +155,23 @@ export function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?
 
   if (diffLines.length > 0) {
     return diffLines.join('\n');
+  }
+
+  // 2. Fall back to extracting diff from result text
+  if (resultStr) {
+    const diffBlockMatch = resultStr.match(/\[diff_block_start\]([\s\S]*?)\[diff_block_end\]/);
+    if (diffBlockMatch && diffBlockMatch[1].trim()) {
+      let rawDiff = diffBlockMatch[1].trim();
+      if (!rawDiff.includes('--- ') && !rawDiff.includes('+++ ')) {
+        const rFile = getArgVal(args, 'TargetFile', 'targetFile', 'target_file', 'path', 'file', 'AbsolutePath', 'absolutePath', 'FilePath', 'filePath') || extractTargetFile(toolName, rawArgs, rawResult) || '';
+        const rFileName = rFile ? String(rFile).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
+        rawDiff = `--- a/${rFileName}\n+++ b/${rFileName}\n${rawDiff}`;
+      }
+      return rawDiff;
+    }
+    if (isDiffText(resultStr)) {
+      return resultStr.trim();
+    }
   }
 
   if (isFileEditTool(name)) {

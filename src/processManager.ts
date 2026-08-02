@@ -3,6 +3,7 @@ import * as readline from 'readline';
 import * as path from 'path';
 import { EventEmitter } from 'events';
 import { AgyStreamEvent } from './types';
+import { normalizePath, normalizePathLower } from './pathUtils';
 
 export class AgyProcessManager extends EventEmitter {
   private process: ChildProcess | null = null;
@@ -42,9 +43,9 @@ export class AgyProcessManager extends EventEmitter {
     }
 
     if (options.extraWorkspaceDirs && options.extraWorkspaceDirs.length > 0) {
-      const normCwd = path.resolve(cwd).replace(/\\/g, '/').toLowerCase();
+      const normCwd = normalizePathLower(cwd);
       for (const extraDir of options.extraWorkspaceDirs) {
-        const normExtra = path.resolve(extraDir).replace(/\\/g, '/').toLowerCase();
+        const normExtra = normalizePathLower(extraDir);
         if (normExtra && normExtra !== normCwd) {
           args.push('--add-dir', extraDir);
         }
@@ -52,10 +53,9 @@ export class AgyProcessManager extends EventEmitter {
     }
 
     if (options.images && options.images.length > 0) {
-      const normCwd = path.resolve(cwd).replace(/\\/g, '/').toLowerCase();
+      const normCwd = normalizePathLower(cwd);
       for (const imgPath of options.images) {
-        const normalized = path.resolve(imgPath).replace(/\\/g, '/');
-        const imgDir = path.dirname(normalized);
+        const imgDir = path.dirname(normalizePath(imgPath));
         const normImgDir = imgDir.toLowerCase();
         if (normImgDir && normImgDir !== normCwd && !normImgDir.startsWith(normCwd + '/')) {
           args.push('--add-dir', imgDir);

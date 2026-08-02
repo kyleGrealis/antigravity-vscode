@@ -41,18 +41,3 @@ export interface AgyStreamEvent {
   error?: string;
   conversation_id?: string;
 }
-
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  thinking?: string;
-  timestamp: number;
-  tokens?: AgyUsage;
-  isStreaming?: boolean;
-  toolCalls?: Array<{
-    name: string;
-    args?: Record<string, any>;
-    status?: 'running' | 'done' | 'error';
-  }>;
-}
