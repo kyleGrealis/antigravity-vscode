@@ -49,8 +49,16 @@ export class DiffController {
   }
 
   public async showDiffFromToolCall(targetFilePath: string, toolName: string, toolArgs: any): Promise<void> {
+    const cleanPath = String(targetFilePath || '').replace(/^["']|["']$/g, '').trim();
+    if (!cleanPath) return;
+
     const normName = (toolName || '').toLowerCase().replace(/[-_]/g, '');
-    const resolvedTargetPath = this.resolvePath(targetFilePath);
+    const resolvedTargetPath = this.resolvePath(cleanPath);
+
+    let args = toolArgs;
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch {}
+    }
 
     let originalContent = '';
     if (fs.existsSync(resolvedTargetPath)) {
@@ -60,15 +68,15 @@ export class DiffController {
     let proposedContent = originalContent;
 
     if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
-      const target = toolArgs?.TargetContent || toolArgs?.targetContent || toolArgs?.target_content || '';
-      const replacement = toolArgs?.ReplacementContent || toolArgs?.replacementContent || toolArgs?.replacement_content || '';
+      const target = args?.TargetContent || args?.targetContent || args?.target_content || '';
+      const replacement = args?.ReplacementContent || args?.replacementContent || args?.replacement_content || '';
       if (target && originalContent.includes(target)) {
         proposedContent = originalContent.replace(target, replacement);
       } else if (replacement) {
         proposedContent = replacement;
       }
     } else if (normName.includes('multireplacefilecontent')) {
-      const chunks = toolArgs?.ReplacementChunks || toolArgs?.replacementChunks || toolArgs?.chunks || [];
+      const chunks = args?.ReplacementChunks || args?.replacementChunks || args?.chunks || [];
       if (Array.isArray(chunks)) {
         let temp = originalContent;
         for (const chunk of chunks) {
@@ -81,10 +89,18 @@ export class DiffController {
         proposedContent = temp;
       }
     } else if (normName.includes('writetofile') || normName.includes('writefile')) {
-      proposedContent = toolArgs?.CodeContent || toolArgs?.codeContent || toolArgs?.code || '';
+      proposedContent = args?.CodeContent || args?.codeContent || args?.code || args?.code_content || '';
     }
 
-    await this.showDiff(targetFilePath, proposedContent);
+    if (originalContent === proposedContent && fs.existsSync(resolvedTargetPath)) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedTargetPath));
+        await vscode.window.showTextDocument(doc, { preview: false });
+        return;
+      } catch {}
+    }
+
+    await this.showDiff(resolvedTargetPath, proposedContent);
   }
 
   public async acceptDiff(targetFilePath?: string): Promise<void> {

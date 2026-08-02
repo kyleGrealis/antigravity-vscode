@@ -6,6 +6,7 @@ import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
 import { loadSkills } from './skillManager';
+import { PlanManager } from './planManager';
 
 function formatPermissionError(res: any): any {
   if (typeof res !== 'string') return res;
@@ -20,7 +21,7 @@ function formatPermissionError(res: any): any {
   return res;
 }
 
-function cleanToolArgs(rawArgs: any): Record<string, any> | undefined {
+function cleanToolArgs(rawArgs: any): any {
   if (!rawArgs) return undefined;
   let parsed = rawArgs;
   if (typeof parsed === 'string') {
@@ -33,45 +34,51 @@ function cleanToolArgs(rawArgs: any): Record<string, any> | undefined {
   if (typeof parsed === 'string') {
     try {
       parsed = JSON.parse(parsed);
-    } catch {
-      // not JSON
-    }
+    } catch {}
   }
   if (!parsed || typeof parsed !== 'object') {
-    return typeof rawArgs === 'string' && rawArgs.trim() ? { arg: rawArgs.trim() } : undefined;
+    return typeof rawArgs === 'string' && rawArgs.trim() ? rawArgs.trim().replace(/^"|"$/g, '') : undefined;
   }
-  const cleanedArgs: Record<string, any> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    if (typeof v === 'string') {
-      let valStr = v.trim();
-      if ((valStr.startsWith('"') && valStr.endsWith('"')) || (valStr.startsWith('{') && valStr.endsWith('}')) || (valStr.startsWith('[') && valStr.endsWith(']'))) {
+
+  const unquote = (val: any): any => {
+    if (typeof val === 'string') {
+      let s = val.trim();
+      if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
         try {
-          cleanedArgs[k] = JSON.parse(valStr);
+          const unq = JSON.parse(s);
+          if (typeof unq === 'string') return unq;
         } catch {
-          if (valStr.startsWith('"') && valStr.endsWith('"') && valStr.length >= 2) {
-            cleanedArgs[k] = valStr.slice(1, -1);
-          } else {
-            cleanedArgs[k] = valStr;
-          }
+          return s.slice(1, -1);
         }
-      } else {
-        cleanedArgs[k] = v;
       }
-    } else {
-      cleanedArgs[k] = v;
+      return val;
     }
-  }
-  return Object.keys(cleanedArgs).length > 0 ? cleanedArgs : undefined;
+    if (Array.isArray(val)) {
+      return val.map(unquote);
+    }
+    if (val && typeof val === 'object') {
+      const cleanedObj: Record<string, any> = {};
+      for (const k of Object.keys(val)) {
+        cleanedObj[k] = unquote(val[k]);
+      }
+      return cleanedObj;
+    }
+    return val;
+  };
+
+  return unquote(parsed);
 }
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'antigravityVSCodeSidebar';
-  private view?: vscode.WebviewView;
+  public view?: vscode.WebviewView;
   private currentPanel?: vscode.WebviewPanel;
   private sessionSkipPermissions: boolean = false;
   private sessionAllowedCommands: Set<string> = new Set();
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
+  private isSteeringPivot = false;
+  private readonly planManager: PlanManager = new PlanManager();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -79,7 +86,21 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     private readonly diffController: DiffController,
     private readonly context?: vscode.ExtensionContext
   ) {
+    const activeWorkspacePath = this.resolveWorkingDirectory();
     let restoredId = this.context?.workspaceState.get<string>('activeConversationId');
+    if (restoredId) {
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+      const convDir = path.join(brainDir, restoredId);
+      if (fs.existsSync(convDir)) {
+        const wsInfo = this.getSessionWorkspace(restoredId, convDir);
+        if (!this.isWorkspaceMatch(wsInfo.workspacePath, activeWorkspacePath)) {
+          restoredId = undefined;
+        }
+      } else {
+        restoredId = undefined;
+      }
+    }
+
     if (!restoredId) {
       const sessions = this.getSessionsList();
       if (sessions.length > 0) {
@@ -87,22 +108,41 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         this.context?.workspaceState.update('activeConversationId', restoredId);
       }
     }
-    if (restoredId && !this.processManager.getConversationId()) {
+    if (restoredId) {
       this.processManager.setConversationId(restoredId);
+    } else {
+      this.processManager.newSession();
     }
 
     this.processManager.on('event', (event: AgyStreamEvent) => {
       this.handleAgyEvent(event);
     });
     this.processManager.on('cancelled', () => {
+      if (this.isSteeringPivot) {
+        return;
+      }
       this.getWebviews().forEach((wv) =>
         wv.postMessage({ type: 'cancelled' })
       );
     });
     this.processManager.on('close', () => {
+      if (this.isSteeringPivot) {
+        return;
+      }
       this.getWebviews().forEach((wv) =>
         wv.postMessage({ type: 'processExit' })
       );
+    });
+
+    this.setupPlanFileWatcher();
+
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration('antigravity.dangerouslySkipPermissions') ||
+        e.affectsConfiguration('antigravity.bypassSandbox')
+      ) {
+        this.sendConfigUpdate();
+      }
     });
   }
 
@@ -120,6 +160,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
     this.setupWebviewMessageListeners(webviewView.webview);
     this.sendSlashCommands(webviewView.webview);
+    this.sendConfigUpdate(webviewView.webview);
   }
 
   public createOrShowPanel(): vscode.WebviewPanel {
@@ -159,36 +200,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const baseCommands = [
       { name: 'new', description: 'start a new conversation' },
       { name: 'clear', description: 'clear chat history' },
-      {
-        name: 'model',
-        description: 'set the model',
-        hasArg: true,
-        argHint: '<model-name>',
-        options: [
-          { value: 'flash-lite', label: 'Gemini 2.5 Flash Lite' },
-          { value: 'flash', label: 'Gemini 2.5 Flash' },
-          { value: 'pro', label: 'Gemini 2.5 Pro' },
-          { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
-          { value: 'claude-3-5-sonnet', label: 'Claude 3.5 Sonnet' },
-        ]
-      },
-      {
-        name: 'effort',
-        description: 'set reasoning effort',
-        hasArg: true,
-        argHint: 'low | medium | high',
-        options: [
-          { value: 'low', label: 'Low reasoning effort' },
-          { value: 'medium', label: 'Medium reasoning effort' },
-          { value: 'high', label: 'High reasoning effort' },
-        ]
-      },
       { name: 'plan', description: 'request step-by-step planning before execution' },
+      { name: 'usage', description: 'show session token usage statistics overlay' },
       { name: 'goal', description: 'run a long-running task with extra thoroughness' },
       { name: 'schedule', description: 'set a timer or recurring cron schedule' },
       { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'sandbox', description: 'toggle container sandboxing (on/off)', hasArg: true, argHint: '<on|off>' },
+      { name: 'dangerous', description: 'toggle permission auto-approvals (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'settings', description: 'open extension settings' },
       { name: 'help', description: 'show available commands' },
     ];
@@ -221,11 +241,33 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public sendConfigUpdate(targetWebview?: vscode.Webview) {
+    const config = vscode.workspace.getConfiguration('antigravity');
+    const dsp = config.get<boolean>('dangerouslySkipPermissions') === true;
+    const bypassSandbox = config.get<boolean>('bypassSandbox') === true;
+    const msg = { command: 'configUpdate', dangerouslySkipPermissions: dsp, bypassSandbox };
+    if (targetWebview) {
+      targetWebview.postMessage(msg);
+    } else {
+      this.getWebviews().forEach((wv) => wv.postMessage(msg));
+    }
+  }
+
+  public sendActiveModel(targetWebview?: vscode.Webview) {
+    const config = vscode.workspace.getConfiguration('antigravity');
+    const model = config.get<string>('model') || 'gemini-2.5-pro';
+    const webviews = targetWebview ? [targetWebview] : this.getWebviews();
+    webviews.forEach(wv => {
+      wv.postMessage({ type: 'updateModel', model });
+    });
+  }
+
   private setupWebviewMessageListeners(webview: vscode.Webview) {
     webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
+        case 'userPrompt':
         case 'sendPrompt':
-          this.onUserPrompt(message.text, message.images);
+          this.onUserPrompt(message.promptText || message.text, message.images, message.dangerouslySkipPermissions);
           break;
 
         case 'selectImage':
@@ -239,26 +281,63 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'cancel':
           this.pendingPrompt = null;
           this.processManager.cancelCurrentTask();
+          this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
           break;
 
         case 'permissionResponse':
           this.handlePermissionResponse(message.choice);
           break;
 
-        case 'newConversation':
+        case 'ready':
+          this.sendSlashCommands(webview);
+          this.sendConfigUpdate(webview);
+          break;
+
+        case 'newConversation': {
           this.sessionSkipPermissions = false;
           this.sessionAllowedCommands.clear();
           this.processManager.newSession();
           if (this.context) {
             this.context.workspaceState.update('activeConversationId', undefined);
           }
-          webview.postMessage({ type: 'sessionLoaded', conversationId: null, title: 'Untitled', events: [] });
+          const activeWorkspacePath = this.resolveWorkingDirectory();
+          const workspaceInfo = {
+            name: path.basename(activeWorkspacePath),
+            path: activeWorkspacePath,
+          };
+          webview.postMessage({
+            type: 'sessionLoaded',
+            conversationId: null,
+            title: 'Untitled',
+            events: [],
+            workspaceInfo,
+          });
           break;
+        }
 
         case 'getSessions': {
+          const activeWorkspacePath = this.resolveWorkingDirectory();
           let currentId = this.processManager.getConversationId();
+
+          if (currentId) {
+            const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+            const convDir = path.join(brainDir, currentId);
+            const wsInfo = this.getSessionWorkspace(currentId, convDir);
+            if (!this.isWorkspaceMatch(wsInfo.workspacePath, activeWorkspacePath)) {
+              currentId = null;
+            }
+          }
+
           if (!currentId) {
             currentId = this.context?.workspaceState.get<string>('activeConversationId') || null;
+            if (currentId) {
+              const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+              const convDir = path.join(brainDir, currentId);
+              const wsInfo = this.getSessionWorkspace(currentId, convDir);
+              if (!this.isWorkspaceMatch(wsInfo.workspacePath, activeWorkspacePath)) {
+                currentId = null;
+              }
+            }
             if (!currentId) {
               const sessions = this.getSessionsList();
               if (sessions.length > 0) {
@@ -270,10 +349,19 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
               if (this.context) {
                 this.context.workspaceState.update('activeConversationId', currentId);
               }
+            } else {
+              this.processManager.newSession();
+              this.context?.workspaceState.update('activeConversationId', undefined);
             }
           }
+
           const sessions = this.getSessionsList();
-          webview.postMessage({ type: 'sessionsList', sessions, currentId });
+          const workspaceInfo = {
+            name: path.basename(activeWorkspacePath),
+            path: activeWorkspacePath,
+          };
+          webview.postMessage({ type: 'sessionsList', sessions, currentId, workspaceInfo });
+
           if (currentId) {
             const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
             const convDir = path.join(brainDir, currentId);
@@ -283,7 +371,16 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
               type: 'sessionLoaded',
               conversationId: currentId,
               title,
-              events
+              events,
+              workspaceInfo,
+            });
+          } else {
+            webview.postMessage({
+              type: 'sessionLoaded',
+              conversationId: null,
+              title: 'Untitled',
+              events: [],
+              workspaceInfo,
             });
           }
           break;
@@ -296,16 +393,24 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           if (this.context) {
             this.context.workspaceState.update('activeConversationId', message.conversationId);
           }
+          const activeWorkspacePath = this.resolveWorkingDirectory();
+          this.saveSessionWorkspace(message.conversationId, activeWorkspacePath);
+
           const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
           const convDir = path.join(brainDir, message.conversationId);
           const title = this.getSessionTitle(message.conversationId, convDir);
           const events = this.loadSessionHistory(message.conversationId);
+          const workspaceInfo = {
+            name: path.basename(activeWorkspacePath),
+            path: activeWorkspacePath,
+          };
 
           webview.postMessage({
             type: 'sessionLoaded',
             conversationId: message.conversationId,
             title,
-            events
+            events,
+            workspaceInfo,
           });
           break;
         }
@@ -315,8 +420,13 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             this.saveSessionTitle(message.conversationId, message.title);
             const sessions = this.getSessionsList();
             const currentId = this.processManager.getConversationId();
+            const activeWorkspacePath = this.resolveWorkingDirectory();
+            const workspaceInfo = {
+              name: path.basename(activeWorkspacePath),
+              path: activeWorkspacePath,
+            };
             this.getWebviews().forEach((wv) => {
-              wv.postMessage({ type: 'sessionsList', sessions, currentId });
+              wv.postMessage({ type: 'sessionsList', sessions, currentId, workspaceInfo });
               if (currentId === message.conversationId) {
                 wv.postMessage({ type: 'updateTitle', title: message.title });
               }
@@ -367,6 +477,31 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             this.diffController.showDiffFromToolCall(message.targetFile, message.toolName, message.toolArgs);
           }
           break;
+
+        case 'openPlanFile':
+          if (message.filePath) {
+            this.planManager.openPlanInEditor(message.filePath);
+          } else {
+            const cwd = this.resolveWorkingDirectory();
+            const planPath = path.join(cwd, '.antigravity', 'plan.md');
+            this.planManager.openPlanInEditor(planPath);
+          }
+          break;
+
+        case 'createPlan': {
+          const cwd = this.resolveWorkingDirectory();
+          const convId = this.processManager.getConversationId() || '';
+          const planData = this.planManager.createPlan(cwd, convId, message.title || 'Feature Plan', message.steps || []);
+          this.getWebviews().forEach(wv => wv.postMessage({ type: 'planCreated', plan: planData }));
+          break;
+        }
+
+        case 'togglePlanStep': {
+          if (message.filePath && message.stepIndex !== undefined) {
+            this.planManager.updateStepStatus(message.filePath, message.stepIndex, message.completed);
+          }
+          break;
+        }
       }
     });
   }
@@ -391,13 +526,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       if (ext === 'svg+xml') ext = 'svg';
       const buffer = Buffer.from(matches[2], 'base64');
       
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      let saveDir = os.tmpdir();
-      if (workspaceFolders && workspaceFolders.length > 0) {
-        saveDir = path.join(workspaceFolders[0].uri.fsPath, '.antigravity');
-        if (!fs.existsSync(saveDir)) {
-          fs.mkdirSync(saveDir, { recursive: true });
-        }
+      const saveDir = path.join(os.tmpdir(), 'antigravity-pastes');
+      if (!fs.existsSync(saveDir)) {
+        fs.mkdirSync(saveDir, { recursive: true });
       }
 
       const filePath = path.join(saveDir, `agy_paste_${Date.now()}.${ext}`).replace(/\\/g, '/');
@@ -453,6 +584,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     } else if (choice === 'yes') {
       const continuationPrompt = "Permission granted for the requested command. Please proceed with the task.";
       this.executePrompt(continuationPrompt, [], false);
+    } else if (choice === 'no' || choice === 'deny' || choice === 'cancel') {
+      this.processManager.cancelCurrentTask();
+      this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
     } else if (choice === 'settings') {
       vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity.dangerouslySkipPermissions');
     }
@@ -486,85 +620,133 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     return parts.join('\n\n');
   }
 
-  private handleSlashCommand(name: string, arg: string | undefined, webview: vscode.Webview) {
-    const uiCommands = ['new', 'clear', 'model', 'effort', 'settings', 'help'];
-    if (!uiCommands.includes(name)) {
-      let promptText = '';
-      if (name === 'skill') {
-        promptText = arg ? `Use the ${arg} skill.` : '/skill';
-      } else if (arg) {
-        promptText = `/${name} ${arg}`;
-      } else {
-        promptText = `/${name}`;
+  public handleSlashCommand(name: string, arg?: string, targetWebview?: vscode.Webview) {
+    if (name === 'new') {
+      this.sessionSkipPermissions = false;
+      this.sessionAllowedCommands.clear();
+      this.processManager.newSession();
+      if (this.context) {
+        this.context.workspaceState.update('activeConversationId', undefined);
       }
-      this.onUserPrompt(promptText, []);
       return;
     }
 
-    const config = vscode.workspace.getConfiguration('antigravity');
-
-    switch (name) {
-      case 'new':
-        this.sessionSkipPermissions = false;
-        this.sessionAllowedCommands.clear();
-        this.processManager.newSession();
-        webview.postMessage({ type: 'slashResult', name, message: 'New conversation started.' });
-        break;
-
-      case 'clear':
-        this.sessionSkipPermissions = false;
-        this.sessionAllowedCommands.clear();
-        this.processManager.newSession();
-        webview.postMessage({ type: 'slashResult', name, message: 'Chat cleared.' });
-        break;
-
-      case 'model': {
-        if (arg) {
-          config.update('model', arg, vscode.ConfigurationTarget.Global);
-          webview.postMessage({ type: 'slashResult', name, message: `Model set to ${arg}.` });
-        } else {
-          const current = config.get<string>('model') || '(default)';
-          webview.postMessage({ type: 'slashResult', name, message: `Current model: ${current}. Usage: /model <name>` });
-        }
-        break;
-      }
-
-      case 'effort': {
-        const valid = ['low', 'medium', 'high'];
-        if (arg && valid.includes(arg)) {
-          config.update('effort', arg, vscode.ConfigurationTarget.Global);
-          webview.postMessage({ type: 'slashResult', name, message: `Effort set to ${arg}.` });
-        } else {
-          const current = config.get<string>('effort') || '(default)';
-          webview.postMessage({ type: 'slashResult', name, message: `Current effort: ${current}. Options: low, medium, high` });
-        }
-        break;
-      }
-
-      case 'settings':
-        vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity');
-        break;
-
-      case 'help': {
-        const help = [
-          '/new        start a new conversation',
-          '/clear      clear chat history',
-          '/model      set the model (/model <name>)',
-          '/effort     set reasoning effort (/effort low|medium|high)',
-          '/settings   open extension settings',
-          '/help       show this list',
-        ].join('\n');
-        webview.postMessage({ type: 'slashResult', name, message: help });
-        break;
-      }
+    if (name === 'clear') {
+      this.sessionSkipPermissions = false;
+      this.sessionAllowedCommands.clear();
+      this.processManager.newSession();
+      return;
     }
+
+    if (name === 'sandbox') {
+      const config = vscode.workspace.getConfiguration('antigravity');
+      const currentBypass = config.get<boolean>('bypassSandbox') === true;
+      let nextBypass = !currentBypass;
+      if (arg === 'on') nextBypass = false;
+      if (arg === 'off') nextBypass = true;
+      config.update('bypassSandbox', nextBypass, vscode.ConfigurationTarget.Global);
+      return;
+    }
+
+    if (name === 'dangerous') {
+      const config = vscode.workspace.getConfiguration('antigravity');
+      const currentDsp = config.get<boolean>('dangerouslySkipPermissions') === true;
+      let nextDsp = !currentDsp;
+      if (arg === 'on') nextDsp = true;
+      if (arg === 'off') nextDsp = false;
+      config.update('dangerouslySkipPermissions', nextDsp, vscode.ConfigurationTarget.Global);
+      return;
+    }
+
+    if (name === 'settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'antigravity');
+      return;
+    }
+
+    if (name === 'help') {
+      const helpMessage = [
+        '### Antigravity Slash Commands & Help',
+        '',
+        '| Command | Description |',
+        '| :--- | :--- |',
+        '| `/sandbox <on\\|off>` | Toggle container sandboxing (`sandbox on` / `sandbox off`) |',
+        '| `/dangerous <on\\|off>` | Toggle permission auto-approvals (`auto accept` / `default`) |',
+        '| `/plan [description]` | Start Plan Mode and generate implementation plan |',
+        '| `/usage` | Display session token usage statistics overlay |',
+        '| `/new` | Start a fresh conversation session |',
+        '| `/clear` | Clear chat history |',
+        '| `/settings` | Open extension settings pane |',
+        '| `/help` | Display this command help card |',
+        '| `/<skill-name>` | Execute local agent skill |',
+        '',
+        '**Keyboard Shortcuts:**',
+        '- `Shift+Tab`: Cycle execution modes (`Default` -> `plan` -> `auto accept` -> `Default`)',
+      ].join('\n');
+
+      const postMsg = (wv: vscode.Webview) => wv.postMessage({
+        type: 'slashResult',
+        name: 'help',
+        message: helpMessage,
+      });
+
+      if (targetWebview) {
+        postMsg(targetWebview);
+      } else {
+        this.getWebviews().forEach(postMsg);
+      }
+      return;
+    }
+
+    if (name === 'grill-me' || name === 'grillme') {
+      const topic = arg ? arg.trim() : 'the proposed feature implementation';
+      const grillPrompt = `[GRILL ME MODE] Conduct an interactive architectural interview with me about "${topic}". Inspect the codebase first, then ask 2-3 focused clarification questions about design trade-offs, scope boundaries, or edge cases using the ask_question tool. Do NOT write code or finalize a plan file until we have aligned on these choices.`;
+      this.onUserPrompt(grillPrompt, []);
+      return;
+    }
+
+    if (name === 'plan') {
+      const title = arg ? arg.trim() : 'Feature Plan';
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const timestampStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const planFilePath = `.antigravity/plans/PLAN-${timestampStr}.md`;
+
+      const planPrompt = `[PLAN MODE] Analyze the following feature request: "${title}". First, inspect the workspace and ask any clarification questions using ask_question if needed before finalizing. Then write the implementation plan to "${planFilePath}" formatted with markdown checkboxes '- [ ] task description'. Include all necessary steps for the task regardless of count (whether 2 or 15+ steps); do not artificially limit or pad step count.`;
+      this.onUserPrompt(planPrompt, []);
+      return;
+    }
+
+    let promptText = '';
+    if (name === 'skill') {
+      promptText = arg ? `Use the ${arg} skill.` : 'Use a skill.';
+    } else {
+      promptText = arg ? `Use the ${name} skill. ${arg}` : `Use the ${name} skill.`;
+    }
+    this.onUserPrompt(promptText, []);
   }
 
-  private onUserPrompt(promptText: string, images?: string[]) {
+  private onUserPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
+    if (this.processManager.isBusy()) {
+      this.isSteeringPivot = true;
+      this.processManager.cancelCurrentTask();
+
+      const webviews = this.getWebviews();
+      webviews.forEach((wv) => wv.postMessage({ type: 'steeringPivot', text: promptText }));
+
+      setTimeout(() => {
+        const steeringPrompt = `[MID-TURN STEERING NOTE]\nThe user has provided live guidance mid-turn. Please integrate the following note into your ongoing work immediately:\n${promptText}`;
+        this.executePrompt(steeringPrompt, images, dangerouslySkipPermissions);
+        this.isSteeringPivot = false;
+      }, 180);
+      return;
+    }
+
     this.lastUserPrompt = { promptText, images };
     const config = vscode.workspace.getConfiguration('antigravity');
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
-    const effectiveSkip = settingSkip || this.sessionSkipPermissions;
+    const effectiveSkip = dangerouslySkipPermissions !== undefined
+      ? dangerouslySkipPermissions
+      : (settingSkip || this.sessionSkipPermissions);
 
     this.executePrompt(promptText, images, effectiveSkip);
   }
@@ -572,8 +754,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private executePrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const cliPath = config.get<string>('cliPath') || 'agy';
-    const model = config.get<string>('model') || undefined;
-    const effort = config.get<string>('effort') || undefined;
     const cwd = this.resolveWorkingDirectory();
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
     const skipPermissions = dangerouslySkipPermissions !== undefined
@@ -581,14 +761,26 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       : (settingSkip || this.sessionSkipPermissions);
     const isFirstTurn = !this.processManager.getConversationId();
 
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const extraWorkspaceDirs: string[] = [];
+    if (workspaceFolders && workspaceFolders.length > 1) {
+      for (let i = 1; i < workspaceFolders.length; i++) {
+        extraWorkspaceDirs.push(workspaceFolders[i].uri.fsPath);
+      }
+    }
+
+    const currentConvId = this.processManager.getConversationId();
+    if (currentConvId) {
+      this.saveSessionWorkspace(currentConvId, cwd);
+    }
+
     const normalizedImages = images?.map((img) => img.replace(/\\/g, '/'));
     const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
 
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
-      model,
-      effort,
       dangerouslySkipPermissions: skipPermissions,
       images: normalizedImages,
+      extraWorkspaceDirs,
     });
   }
 
@@ -609,9 +801,16 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private handleAgyEvent(event: AgyStreamEvent) {
+    if (this.isSteeringPivot && (event.event === 'result' || event.event === 'error')) {
+      return;
+    }
+
     const currentId = this.processManager.getConversationId();
-    if (currentId && this.context) {
-      this.context.workspaceState.update('activeConversationId', currentId);
+    if (currentId) {
+      if (this.context) {
+        this.context.workspaceState.update('activeConversationId', currentId);
+      }
+      this.saveSessionWorkspace(currentId, this.resolveWorkingDirectory());
     }
 
     const webviews = this.getWebviews();
@@ -665,13 +864,13 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           let toolName = tcItem.name || tcItem.tool_name || tcItem.function?.name || stepType || 'Tool Execution';
           toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
 
-          let rawArgs = tcItem.args || tcItem.tool_args || tcItem.input || tcItem.parameters || tcItem.function?.arguments;
+          let rawArgs = tcItem.args || tcItem.tool_args || tcItem.input || tcItem.parameters || tcItem.function?.arguments || step.tool_args || step.args;
           let toolArgs = cleanToolArgs(rawArgs);
 
           let rawError = toolInfo.error || step.error || tcItem.error;
           let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
 
-          let toolResult = tcItem.result || tcItem.output || toolInfo.output || step.content || step.output || step.result || step.text || (errorMessage ? `[Error] ${errorMessage}` : undefined);
+          let toolResult = tcItem.result || tcItem.output || tcItem.content || tcItem.diff || toolInfo.output || toolInfo.result || toolInfo.content || toolInfo.text || toolInfo.response || toolInfo.diff || toolInfo.changes || step.content || step.output || step.result || step.text || step.diff || (errorMessage ? `[Error] ${errorMessage}` : undefined);
           toolResult = formatPermissionError(toolResult);
           const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
           const toolId = tcItem.id || tcItem.tool_call_id || tcItem.call_id || (step.step_index !== undefined ? `step_${step.step_index}_${idx}` : `${toolName}_${idx}`);
@@ -689,15 +888,18 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         });
       } else if (isToolCall) {
         let toolName = toolNameRaw || (isKnownToolType ? stepType : '');
+        if ((stepType === 'code_action' || stepType === 'cortex_step_type_code_action') && !toolName) {
+          toolName = 'replace_file_content';
+        }
         toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
 
-        let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args;
+        let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args || (step.tool_calls && step.tool_calls[0] ? (step.tool_calls[0].args || step.tool_calls[0].tool_args) : undefined);
         let toolArgs = cleanToolArgs(rawArgs);
 
         let rawError = toolInfo.error || step.error;
         let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
 
-        let toolResult = toolInfo.output || step.content || step.output || step.result || step.text || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
+        let toolResult = toolInfo.output || toolInfo.result || toolInfo.content || toolInfo.text || toolInfo.response || toolInfo.diff || toolInfo.changes || step.content || step.output || step.result || step.text || step.diff || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
         toolResult = formatPermissionError(toolResult);
 
         const isGenericName = !toolName || ['tool', 'tool_call', 'tool_use', 'tool execution', 'tool_execution'].includes(toolName);
@@ -705,7 +907,16 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         if (!isGenericName || toolArgs || toolResult) {
           if (isGenericName) toolName = 'Tool Execution';
           const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
-          const toolId = step.tool_call_id || step.call_id || step.id || (step.step_index !== undefined ? `step_${step.step_index}` : toolName);
+          let toolId = step.tool_call_id || step.call_id || step.id;
+          if (!toolId && step.step_index !== undefined) {
+            if (stepType === 'code_action' || stepType === 'cortex_step_type_code_action') {
+              const prevIndex = Math.max(0, step.step_index - 1);
+              toolId = `step_${prevIndex}_0`;
+            } else {
+              toolId = `step_${step.step_index}_0`;
+            }
+          }
+          if (!toolId) toolId = toolName;
 
           webviews.forEach((wv) =>
             wv.postMessage({
@@ -736,10 +947,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       }
 
       if (step.state === 'DONE' && step.usage) {
+        const convId = event.conversation_id || this.processManager.getConversationId();
         webviews.forEach((wv) =>
           wv.postMessage({
             type: 'stepComplete',
             usage: step.usage,
+            conversationId: convId,
           })
         );
       }
@@ -752,12 +965,14 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         resultObj.output ||
         '';
 
+      const convId = event.conversation_id || this.processManager.getConversationId();
       webviews.forEach((wv) =>
         wv.postMessage({
           type: 'result',
           status: resultObj.status,
           response: responseText,
           usage: resultObj.usage,
+          conversationId: convId,
         })
       );
     } else if (event.event === 'error') {
@@ -772,13 +987,74 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   public sendActiveFileContext() {
     const editor = vscode.window.activeTextEditor;
-    const filePath = editor ? vscode.workspace.asRelativePath(editor.document.uri) : null;
+    const visibleEditors = vscode.window.visibleTextEditors;
+    let filePath: string | null = null;
+
+    if (
+      editor &&
+      visibleEditors.length > 0 &&
+      visibleEditors.some((e) => e.document === editor.document) &&
+      editor.document &&
+      editor.document.uri.scheme === 'file'
+    ) {
+      const fsPath = editor.document.uri.fsPath;
+      if (fs.existsSync(fsPath)) {
+        filePath = vscode.workspace.asRelativePath(editor.document.uri);
+      }
+    }
     this.getWebviews().forEach((wv) =>
       wv.postMessage({
         type: 'activeFile',
         filePath: filePath,
       })
     );
+  }
+
+  private setupPlanFileWatcher() {
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*plan*.md');
+    const handlePlanFile = (uri: vscode.Uri) => {
+      try {
+        const filePath = uri.fsPath;
+        if (!fs.existsSync(filePath)) return;
+        const content = fs.readFileSync(filePath, 'utf-8');
+        
+        const lines = content.split('\n');
+        let title = path.basename(filePath);
+        const titleMatch = content.match(/^# (?:Feature Implementation Plan:)?\s*(.+)$/m);
+        if (titleMatch) title = titleMatch[1].trim();
+
+        const steps: Array<{ id: string; text: string; completed: boolean }> = [];
+        lines.forEach((line, idx) => {
+          const match = line.match(/^- \[(x|X| )\]\s*(.+)$/);
+          if (match) {
+            steps.push({
+              id: `step-${idx + 1}`,
+              text: match[2].trim(),
+              completed: match[1].toLowerCase() === 'x',
+            });
+          }
+        });
+
+        this.planManager.openPlanInEditor(filePath);
+
+        if (steps.length > 0) {
+          const planData = {
+            filePath,
+            timestamp: new Date().toISOString(),
+            title,
+            steps,
+          };
+          this.getWebviews().forEach((wv) =>
+            wv.postMessage({ type: 'planCreated', plan: planData })
+          );
+        }
+      } catch (err) {
+        console.error('Failed to parse created plan file:', err);
+      }
+    };
+
+    watcher.onDidCreate(handlePlanFile);
+    watcher.onDidChange(handlePlanFile);
   }
 
   private async handleSearchFiles(query: string, webview: vscode.Webview) {
@@ -888,12 +1164,27 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       const lines = content.split('\n');
       const events: Array<{ type: string; [key: string]: any }> = [];
       let lastToolCallRef: any = null;
+      let currentTurnUsage: any = null;
 
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
+          const lineUsage = parsed.usage || parsed.tokens;
+          if (lineUsage) {
+            if (!currentTurnUsage) {
+              currentTurnUsage = { ...lineUsage };
+            } else {
+              if (lineUsage.input_tokens) currentTurnUsage.input_tokens = Math.max(currentTurnUsage.input_tokens || 0, lineUsage.input_tokens);
+              if (lineUsage.output_tokens) currentTurnUsage.output_tokens = Math.max(currentTurnUsage.output_tokens || 0, lineUsage.output_tokens);
+              if (lineUsage.thinking_tokens) currentTurnUsage.thinking_tokens = Math.max(currentTurnUsage.thinking_tokens || 0, lineUsage.thinking_tokens);
+              if (lineUsage.cache_read_tokens) currentTurnUsage.cache_read_tokens = Math.max(currentTurnUsage.cache_read_tokens || 0, lineUsage.cache_read_tokens);
+              if (lineUsage.total_tokens) currentTurnUsage.total_tokens = Math.max(currentTurnUsage.total_tokens || 0, lineUsage.total_tokens);
+            }
+          }
+
           if (parsed.type === 'USER_INPUT' && parsed.content) {
+            currentTurnUsage = null;
             lastToolCallRef = null;
             const reqMatch = parsed.content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
             const rawText = reqMatch ? reqMatch[1].trim() : parsed.content.trim();
@@ -910,7 +1201,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
             }
           } else if (parsed.type === 'PLANNER_RESPONSE' || parsed.type === 'MODEL') {
             if (parsed.content) {
-              events.push({ type: 'assistantText', text: parsed.content });
+              events.push({ type: 'assistantText', text: parsed.content, usage: currentTurnUsage });
             }
             if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
               for (const tc of parsed.tool_calls) {
@@ -947,13 +1238,130 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private getSessionsList(): Array<{ id: string; title: string; updatedAt: number; relativeTime: string }> {
+  private normalizeWorkspacePath(dirPath: string): string {
+    if (!dirPath) return '';
+    let norm = path.resolve(dirPath).replace(/\\/g, '/');
+    if (norm.length > 1 && norm.endsWith('/')) {
+      norm = norm.slice(0, -1);
+    }
+    return norm.toLowerCase();
+  }
+
+  private getSessionWorkspace(convId: string, convDir: string): { workspacePath?: string; workspaceName?: string } {
+    try {
+      const metaPath = path.join(convDir, '.system_generated', 'workspace.json');
+      if (fs.existsSync(metaPath)) {
+        const content = fs.readFileSync(metaPath, 'utf-8');
+        const parsed = JSON.parse(content);
+        if (parsed.workspacePath) {
+          return {
+            workspacePath: parsed.workspacePath,
+            workspaceName: parsed.workspaceName || path.basename(parsed.workspacePath),
+          };
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const transcriptPath = path.join(convDir, '.system_generated', 'logs', 'transcript.jsonl');
+      const altLogPath = path.join(convDir, 'transcript.jsonl');
+      const targetPath = fs.existsSync(transcriptPath) ? transcriptPath : (fs.existsSync(altLogPath) ? altLogPath : null);
+      if (targetPath) {
+        const content = fs.readFileSync(targetPath, 'utf-8');
+        // Match [URI] -> [CorpusName] mapping first
+        const matchUri = content.match(/([\/A-Za-z0-9_\-\.\:\\]+)\s*->\s*[^\s<]+/);
+        if (matchUri && matchUri[1] && !matchUri[1].includes('tmp')) {
+          const wPath = matchUri[1].trim();
+          this.saveSessionWorkspace(convId, wPath);
+          return {
+            workspacePath: wPath,
+            workspaceName: path.basename(wPath),
+          };
+        }
+
+        // Match Cwd or TargetFile / AbsolutePath in tool args
+        const matchDev = content.match(/\/home\/kyle\/dev\/([a-zA-Z0-9_\-\.]+)/);
+        if (matchDev && matchDev[1]) {
+          const wPath = `/home/kyle/dev/${matchDev[1]}`;
+          this.saveSessionWorkspace(convId, wPath);
+          return {
+            workspacePath: wPath,
+            workspaceName: matchDev[1],
+          };
+        }
+
+        const matchCwd = content.match(/"Cwd"\s*:\s*"([^"]+)"/);
+        if (matchCwd && matchCwd[1]) {
+          const cleanCwd = matchCwd[1].replace(/\\"/g, '"').replace(/^"/, '').replace(/"$/, '').replace(/\\\\/g, '/');
+          if (cleanCwd && cleanCwd !== '\\' && cleanCwd !== '/') {
+            this.saveSessionWorkspace(convId, cleanCwd);
+            return {
+              workspacePath: cleanCwd,
+              workspaceName: path.basename(cleanCwd),
+            };
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return {};
+  }
+
+  private saveSessionWorkspace(convId: string, workspacePath: string): void {
+    if (!convId || !workspacePath) return;
+    try {
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+      const sysDir = path.join(brainDir, convId, '.system_generated');
+      if (!fs.existsSync(sysDir)) {
+        fs.mkdirSync(sysDir, { recursive: true });
+      }
+      const metaPath = path.join(sysDir, 'workspace.json');
+      const data = {
+        workspacePath,
+        workspaceName: path.basename(workspacePath),
+        updatedAt: Date.now(),
+      };
+      fs.writeFileSync(metaPath, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Failed to save session workspace metadata:', err);
+    }
+  }
+
+  private isWorkspaceMatch(sessionPath: string | undefined, currentPath: string): boolean {
+    if (!sessionPath || !currentPath) return false;
+    const normSession = this.normalizeWorkspacePath(sessionPath);
+    const normCurrent = this.normalizeWorkspacePath(currentPath);
+    return normSession === normCurrent;
+  }
+
+  private getSessionsList(): Array<{
+    id: string;
+    title: string;
+    updatedAt: number;
+    relativeTime: string;
+    workspacePath?: string;
+    workspaceName?: string;
+    workspaceMatch: boolean;
+  }> {
     try {
       const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
       if (!fs.existsSync(brainDir)) return [];
 
+      const activeWorkspacePath = this.resolveWorkingDirectory();
       const entries = fs.readdirSync(brainDir, { withFileTypes: true });
-      const sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }> = [];
+      const sessions: Array<{
+        id: string;
+        title: string;
+        updatedAt: number;
+        relativeTime: string;
+        workspacePath?: string;
+        workspaceName?: string;
+        workspaceMatch: boolean;
+      }> = [];
 
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
@@ -968,6 +1376,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           continue;
         }
 
+        const wsInfo = this.getSessionWorkspace(convId, convDir);
+        const match = this.isWorkspaceMatch(wsInfo.workspacePath, activeWorkspacePath);
+
+        if (!match) continue;
+
         const title = this.getSessionTitle(convId, convDir);
         const date = new Date(updatedAt);
         const relativeTime = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -976,12 +1389,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           id: convId,
           title,
           updatedAt,
-          relativeTime
+          relativeTime,
+          workspacePath: wsInfo.workspacePath,
+          workspaceName: wsInfo.workspaceName,
+          workspaceMatch: true,
         });
       }
 
       sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-      return sessions.slice(0, 30);
+      return sessions.slice(0, 50);
     } catch (err) {
       console.error('Failed to list sessions:', err);
       return [];
@@ -1008,6 +1424,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 				<img src="${logoUri}" class="header-logo" alt="Antigravity" />
 				<span id="header-session-title" class="header-title" title="Double click to rename session">Untitled</span>
 				<button id="edit-header-title-btn" class="icon-btn edit-title-btn" title="Rename session">&#9999;&#65039;</button>
+				<span id="header-workspace-badge" class="header-workspace-badge" style="display: none;"></span>
 			</div>
 			<div class="header-actions">
 				<button id="history-btn" class="icon-btn" title="Session History">&#128340;</button>
@@ -1046,18 +1463,25 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 		</div>
 
 		<div class="input-area">
-			<div id="context-bar" class="context-bar" style="display: none;">
-				<span id="active-file-context" class="context-chip"></span>
+			<div id="input-context-header" class="input-context-header">
+				<span id="context-hint" class="context-hint">Use @ to mention files or / for commands</span>
+				<div id="context-bar" class="context-bar" style="display: none;">
+					<span id="active-file-context" class="context-chip"></span>
+				</div>
 			</div>
-			<div id="image-attachment-bar" class="image-attachment-bar" style="display: none;"></div>
 			<div class="input-row">
 				<div id="slash-menu" class="slash-menu" style="display: none;"></div>
 				<div id="at-menu" class="at-menu" style="display: none;"></div>
-				<textarea id="prompt-input" rows="1" placeholder="What do you want to do? Use @ to mention files..."></textarea>
+				<div class="prompt-box-container">
+					<div id="image-attachment-bar" class="image-attachment-bar" style="display: none;"></div>
+					<textarea id="prompt-input" rows="1" placeholder="Ask Antigravity or describe a task..."></textarea>
+				</div>
 			</div>
 			<div class="input-footer">
 				<span id="status-text" class="input-hint status-indicator">enter to send, shift+enter for newline</span>
 				<div class="input-actions">
+					<span id="mode-text" class="mode-text" style="display: none;"></span>
+					<span id="sandbox-text" class="mode-text mode-sandbox" style="display: none;"></span>
 					<button id="attach-img-btn" class="icon-btn attach-btn" title="Attach Image">&#128206;</button>
 					<button id="cancel-btn" class="text-btn cancel-btn" style="display: none;">cancel</button>
 					<button id="send-btn" class="text-btn send-btn">send</button>

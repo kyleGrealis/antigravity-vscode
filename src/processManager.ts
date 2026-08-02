@@ -23,10 +23,9 @@ export class AgyProcessManager extends EventEmitter {
     cwd: string,
     prompt: string,
     options: {
-      model?: string;
-      effort?: string;
       dangerouslySkipPermissions?: boolean;
       images?: string[];
+      extraWorkspaceDirs?: string[];
     } = {}
   ): void {
     if (this.turnActive) {
@@ -40,6 +39,16 @@ export class AgyProcessManager extends EventEmitter {
 
     if (cwd) {
       args.push('--add-dir', cwd);
+    }
+
+    if (options.extraWorkspaceDirs && options.extraWorkspaceDirs.length > 0) {
+      const normCwd = path.resolve(cwd).replace(/\\/g, '/').toLowerCase();
+      for (const extraDir of options.extraWorkspaceDirs) {
+        const normExtra = path.resolve(extraDir).replace(/\\/g, '/').toLowerCase();
+        if (normExtra && normExtra !== normCwd) {
+          args.push('--add-dir', extraDir);
+        }
+      }
     }
 
     if (options.images && options.images.length > 0) {
@@ -58,30 +67,24 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--conversation', this.currentConversationId);
     }
 
-    if (options.model && options.model.trim()) {
-      args.push('--model', options.model.trim());
-    }
-
-    if (options.effort && options.effort.trim()) {
-      args.push('--effort', options.effort.trim());
-    }
-
     if (options.dangerouslySkipPermissions === true) {
       args.push('--dangerously-skip-permissions');
     }
 
-    this.process = spawn(cliPath, args, {
+    const proc = spawn(cliPath, args, {
       cwd,
       env: { ...process.env },
       shell: false,
     });
+    this.process = proc;
 
-    this.rl = readline.createInterface({
-      input: this.process.stdout!,
+    const rlInst = readline.createInterface({
+      input: proc.stdout!,
       crlfDelay: Infinity,
     });
+    this.rl = rlInst;
 
-    this.rl.on('line', (line: string) => {
+    rlInst.on('line', (line: string) => {
       const trimmed = line.trim();
       if (!trimmed) return;
 
@@ -99,18 +102,15 @@ export class AgyProcessManager extends EventEmitter {
         if (parsed.step_update?.conversation_id) {
           this.currentConversationId = parsed.step_update.conversation_id;
         }
-        if (parsed.result?.conversation_id) {
-          this.currentConversationId = parsed.result.conversation_id;
-        }
 
         this.emit('event', normalizedEvent);
 
         if (eventType === 'result') {
           this.turnActive = false;
         }
-      } catch {
+      } catch (e) {
         this.emit('event', {
-          event: 'step_update',
+          event: 'agent_response',
           step_update: {
             conversation_id: this.currentConversationId || '',
             step_index: -1,
@@ -118,12 +118,12 @@ export class AgyProcessManager extends EventEmitter {
             step_type: 'agent_response',
             text_delta: line + '\n',
           },
-        } as AgyStreamEvent);
+        } as unknown as AgyStreamEvent);
       }
     });
 
     let stderrOutput = '';
-    this.process.stderr?.on('data', (data: Buffer) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       const msg = data.toString('utf-8');
       stderrOutput += msg;
       if (msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fatal') || msg.toLowerCase().includes('failed')) {
@@ -134,28 +134,32 @@ export class AgyProcessManager extends EventEmitter {
       }
     });
 
-    this.process.on('close', (code: number) => {
-      this.process = null;
-      this.rl = null;
-      this.turnActive = false;
-      if (code !== 0 && code !== null) {
-        const errorText = stderrOutput.trim() || `Process exited with code ${code}`;
-        this.emit('event', {
-          event: 'error',
-          error: errorText,
-        } as AgyStreamEvent);
+    proc.on('close', (code: number) => {
+      if (this.process === proc) {
+        this.process = null;
+        this.rl = null;
+        this.turnActive = false;
+        if (code !== 0 && code !== null) {
+          const errorText = stderrOutput.trim() || `Process exited with code ${code}`;
+          this.emit('event', {
+            event: 'error',
+            error: errorText,
+          } as AgyStreamEvent);
+        }
+        this.emit('close', code);
       }
-      this.emit('close', code);
     });
 
-    this.process.on('error', (err: Error) => {
-      this.process = null;
-      this.rl = null;
-      this.turnActive = false;
-      this.emit('event', {
-        event: 'error',
-        error: err.message,
-      } as AgyStreamEvent);
+    proc.on('error', (err: Error) => {
+      if (this.process === proc) {
+        this.process = null;
+        this.rl = null;
+        this.turnActive = false;
+        this.emit('event', {
+          event: 'error',
+          error: err.message,
+        } as AgyStreamEvent);
+      }
     });
   }
 
@@ -173,8 +177,10 @@ export class AgyProcessManager extends EventEmitter {
 
   public cancelCurrentTask(): void {
     if (this.process && this.turnActive) {
-      this.process.kill('SIGINT');
+      const procToKill = this.process;
+      this.process = null;
       this.turnActive = false;
+      procToKill.kill('SIGINT');
       this.emit('cancelled');
     }
   }

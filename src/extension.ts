@@ -58,9 +58,18 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Track active editor file changes for @context insertion
+  // Track active editor file changes and file lifecycle for @context insertion
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(() => {
+      webviewProvider.sendActiveFileContext();
+    }),
+    vscode.workspace.onDidCloseTextDocument(() => {
+      webviewProvider.sendActiveFileContext();
+    }),
+    vscode.workspace.onDidDeleteFiles(() => {
+      webviewProvider.sendActiveFileContext();
+    }),
+    vscode.workspace.onDidRenameFiles(() => {
       webviewProvider.sendActiveFileContext();
     })
   );
