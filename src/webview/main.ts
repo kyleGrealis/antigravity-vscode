@@ -255,6 +255,16 @@ document.addEventListener('click', (e) => {
       historyDropdown.style.display = 'none';
     }
   }
+
+  const suggestionCard = (e.target as HTMLElement).closest('.suggestion-card');
+  if (suggestionCard) {
+    const promptText = suggestionCard.getAttribute('data-prompt');
+    if (promptText && input) {
+      input.value = promptText;
+      input.focus();
+      adjustInputHeight();
+    }
+  }
 });
 
 log?.addEventListener('click', (e) => {
@@ -610,7 +620,67 @@ function toPascalCaseName(name: string): string {
   if (nameMap[key]) return nameMap[key];
   return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
+function cleanValue(val: any): any {
+  if (typeof val !== 'string') return val;
+  let s = val.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    try {
+      const parsed = JSON.parse(s);
+      if (typeof parsed === 'string') s = parsed;
+    } catch {
+      s = s.slice(1, -1);
+    }
+  }
+  return s.replace(/\\\\/g, '\\');
+}
 
+function formatToolArgsForDisplay(toolName: string, rawArgs: any): { html?: string; text: string } {
+  let argsObj: any = rawArgs;
+  if (typeof rawArgs === 'string') {
+    try {
+      argsObj = JSON.parse(rawArgs);
+    } catch {
+      argsObj = rawArgs;
+    }
+  }
+
+  if (typeof argsObj !== 'object' || !argsObj) {
+    return { text: String(cleanValue(rawArgs || '')) };
+  }
+
+  const cleaned: Record<string, any> = {};
+  for (const k of Object.keys(argsObj)) {
+    cleaned[k] = cleanValue(argsObj[k]);
+  }
+
+  const normName = (toolName || '').toLowerCase().replace(/[-_]/g, '');
+
+  if (normName === 'runcommand' || normName === 'exec' || normName === 'terminal') {
+    const cmd = cleaned.CommandLine || cleaned.commandLine || cleaned.command || cleaned.cmd || '';
+    const cwd = cleaned.Cwd || cleaned.cwd || cleaned.directory || '';
+    const action = cleaned.toolAction || cleaned.toolSummary || cleaned.description || '';
+
+    let html = '<div class="formatted-args-container">';
+    if (cmd) {
+      html += `<div class="formatted-arg-row"><span class="arg-label">Command:</span><code class="arg-cmd-code">${escapeHtml(cmd)}</code></div>`;
+    }
+    if (cwd) {
+      const normCwd = String(cwd).replace(/\\/g, '/');
+      html += `<div class="formatted-arg-row"><span class="arg-label">Directory:</span><span class="arg-val">${escapeHtml(normCwd)}</span></div>`;
+    }
+    if (action && action !== cmd) {
+      html += `<div class="formatted-arg-row"><span class="arg-label">Action:</span><span class="arg-val">${escapeHtml(action)}</span></div>`;
+    }
+    html += '</div>';
+
+    return { html, text: cmd || JSON.stringify(cleaned, null, 2) };
+  }
+
+  delete cleaned.BypassSandbox;
+  delete cleaned.WaitMsBeforeAsync;
+
+  return { text: JSON.stringify(cleaned, null, 2) };
+}
 function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   let args = tc.args;
   if (typeof args === 'string') {
@@ -665,9 +735,75 @@ function formatToolSummary(tc: ToolCall): { text: string; isFile: boolean } {
   };
 }
 
+function renderEmptyState() {
+  if (!log) return;
+  log.innerHTML = `
+    <div id="empty-state" class="empty-state">
+      <div class="empty-state-hero">
+        <svg class="empty-state-logo-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 112 112" fill="none">
+          <path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z" fill="#3186FF"/>
+          <mask id="empty_mask0" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="13" y="18" width="85" height="78">
+            <path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z" fill="black"/>
+          </mask>
+          <g mask="url(#empty_mask0)">
+            <g filter="url(#f0_empty)"><ellipse cx="22.7873" cy="26.8098" rx="22.7873" ry="26.8098" transform="matrix(-0.112784 0.99362 -0.99362 -0.112781 66.2473 -15.5344)" fill="#FFE432"/></g>
+            <g filter="url(#f1_empty)"><ellipse cx="96.491" cy="35.1231" rx="29.5007" ry="30.1492" transform="rotate(76.9243 96.491 35.1231)" fill="#FC413D"/></g>
+            <g filter="url(#f2_empty)"><ellipse cx="9.02988" cy="41.6647" rx="30.832" ry="39.9417" transform="rotate(74.1257 9.02988 41.6647)" fill="#00B95C"/></g>
+            <g filter="url(#f3_empty)"><ellipse cx="11.2212" cy="42.8915" rx="30.22" ry="33.2695" transform="rotate(45.6065 11.2212 42.8915)" fill="#00B95C"/></g>
+            <g filter="url(#f4_empty)"><ellipse cx="75.7546" cy="104.822" rx="29.0177" ry="27.943" transform="rotate(76.9243 75.7546 104.822)" fill="#3186FF"/></g>
+            <g filter="url(#f5_empty)"><ellipse cx="33.5661" cy="35.4043" rx="33.5661" ry="35.4043" transform="matrix(-0.409539 0.912293 -0.912294 -0.409537 101.25 -15.1674)" fill="#FBBC04"/></g>
+            <g filter="url(#f6_empty)"><path d="M2.56802 149.695C-15.8116 142.48 15.5987 83.1163 23.4093 63.2203C31.22 43.3244 52.4514 33.0447 70.831 40.26C89.2107 47.4753 110.996 87.2162 103.185 107.112C95.3742 127.008 20.9477 156.91 2.56802 149.695Z" fill="#3186FF"/></g>
+            <g filter="url(#f7_empty)"><path d="M113.934 75.8079C109.013 81.5509 96.1724 78.6224 85.253 69.2667C74.3335 59.911 69.4704 47.6711 74.391 41.928C79.3116 36.185 92.1525 39.1136 103.072 48.4692C113.991 57.8249 118.855 70.0648 113.934 75.8079Z" fill="#749BFF"/></g>
+            <g filter="url(#f8_empty)"><ellipse cx="92.611" cy="23.7962" rx="44.2411" ry="27.5016" transform="rotate(34.0763 92.611 23.7962)" fill="#FC413D"/></g>
+            <g filter="url(#f9_empty)"><ellipse cx="23.4949" cy="29.5887" rx="23.7071" ry="13.7869" transform="rotate(112.516 23.4949 29.5887)" fill="#FFEE48"/></g>
+          </g>
+          <defs>
+            <filter id="f0_empty" x="2.49" y="-26.54" width="69.09" height="61.25" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3.89"/></filter>
+            <filter id="f1_empty" x="28.75" y="-32.03" width="135.48" height="134.31" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="18.81"/></filter>
+            <filter id="f2_empty" x="-62.29" y="-21.93" width="142.64" height="127.18" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="15.99"/></filter>
+            <filter id="f3_empty" x="-34.25" y="-3.45" width="90.94" height="92.68" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="12.00"/></filter>
+            <filter id="f4_empty" x="28.02" y="56.78" width="95.47" height="96.08" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="10.00"/></filter>
+            <filter id="f5_empty" x="2.49" y="-26.54" width="69.09" height="61.25" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3.89"/></filter>
+            <filter id="f6_empty" x="-20" y="20" width="140" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="10.00"/></filter>
+            <filter id="f7_empty" x="50" y="20" width="80" height="80" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="8.00"/></filter>
+            <filter id="f8_empty" x="40" y="-10" width="105" height="70" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="12.00"/></filter>
+            <filter id="f9_empty" x="0" y="0" width="50" height="60" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="5.00"/></filter>
+          </defs>
+        </svg>
+        <div class="empty-state-title">Antigravity</div>
+        <div class="empty-state-subtitle">How can I help you build today?</div>
+      </div>
+      <div class="empty-state-suggestions">
+        <button class="suggestion-card" data-prompt="Explain the architecture of this workspace">
+          <span class="card-icon">🔍</span>
+          <span class="card-text">Explain workspace architecture</span>
+        </button>
+        <button class="suggestion-card" data-prompt="Help me write unit tests for this project">
+          <span class="card-icon">🧪</span>
+          <span class="card-text">Write unit tests</span>
+        </button>
+        <button class="suggestion-card" data-prompt="Find potential bugs or performance bottlenecks">
+          <span class="card-icon">⚡</span>
+          <span class="card-text">Audit bugs & performance</span>
+        </button>
+        <button class="suggestion-card" data-prompt="/plan Plan step-by-step feature implementation">
+          <span class="card-icon">📋</span>
+          <span class="card-text">Plan feature implementation</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function renderAll(autoScrollForce: boolean = false) {
   if (!log) return;
   const wasAtBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) <= 80;
+  
+  if (messages.length === 0) {
+    renderEmptyState();
+    return;
+  }
+
   log.innerHTML = '';
 
   for (const msg of messages) {
@@ -689,10 +825,10 @@ function renderAll(autoScrollForce: boolean = false) {
 
       for (const tc of msg.toolCalls) {
         const accordion = document.createElement('div');
-        accordion.className = 'tool-accordion';
+        accordion.className = `tool-accordion${tc.expanded ? ' open' : ''}`;
 
         const header = document.createElement('div');
-        header.className = 'tool-header';
+        header.className = `tool-header${tc.expanded ? ' open' : ''}`;
 
         const statusIcon = document.createElement('span');
         const statusClass = tc.status || 'done';
@@ -737,7 +873,7 @@ function renderAll(autoScrollForce: boolean = false) {
 
         let hasContent = false;
 
-        const diffStr = buildDiffFromToolArgs(tc.name, tc.args);
+        const diffStr = buildDiffFromToolArgs(tc.name, tc.args, tc.result);
         if (diffStr) {
           hasContent = true;
           const diffBlock = document.createElement('div');
@@ -751,8 +887,7 @@ function renderAll(autoScrollForce: boolean = false) {
           title.textContent = 'Changes (Diff)';
           diffHeader.appendChild(title);
 
-          const argsObj = typeof tc.args === 'object' && tc.args !== null ? (tc.args as Record<string, any>) : undefined;
-          const targetFile = argsObj?.TargetFile || argsObj?.targetFile || argsObj?.target_file || argsObj?.path || argsObj?.file;
+          const targetFile = extractTargetFile(tc.name, tc.args, tc.result);
           if (targetFile) {
             const openDiffBtn = document.createElement('button');
             openDiffBtn.className = 'open-diff-btn';
@@ -779,7 +914,10 @@ function renderAll(autoScrollForce: boolean = false) {
           bodyInner.appendChild(diffBlock);
         }
 
-        if (tc.args && (typeof tc.args === 'string' || (typeof tc.args === 'object' && Object.keys(tc.args).length > 0))) {
+        const normToolName = (tc.name || '').toLowerCase().replace(/[-_]/g, '');
+        const isFileEditTool = normToolName.includes('replacefilecontent') || normToolName.includes('writetofile') || normToolName.includes('writefile');
+
+        if (!diffStr && !isFileEditTool && tc.args && (typeof tc.args === 'string' || (typeof tc.args === 'object' && Object.keys(tc.args).length > 0))) {
           hasContent = true;
           const argsBlock = document.createElement('div');
           argsBlock.className = 'tool-args-block';
@@ -788,145 +926,146 @@ function renderAll(autoScrollForce: boolean = false) {
           title.textContent = 'Arguments';
           argsBlock.appendChild(title);
 
-          const pre = document.createElement('pre');
-          pre.className = 'tool-json-pre';
-          let formattedArgs = '';
-          if (typeof tc.args === 'string') {
-            try {
-              const parsed = JSON.parse(tc.args);
-              formattedArgs = JSON.stringify(parsed, null, 2);
-            } catch {
-              formattedArgs = tc.args;
-            }
+          const formatted = formatToolArgsForDisplay(tc.name, tc.args);
+          if (formatted.html) {
+            const container = document.createElement('div');
+            container.innerHTML = formatted.html;
+            argsBlock.appendChild(container);
           } else {
-            formattedArgs = JSON.stringify(tc.args, null, 2);
+            const pre = document.createElement('pre');
+            pre.className = 'tool-json-pre';
+            pre.textContent = formatted.text;
+            argsBlock.appendChild(pre);
           }
-          pre.textContent = formattedArgs;
-          argsBlock.appendChild(pre);
           bodyInner.appendChild(argsBlock);
         }
 
         if (tc.result !== undefined && tc.result !== null && String(tc.result).trim() !== '') {
-          hasContent = true;
-          const resultBlock = document.createElement('div');
-          resultBlock.className = 'tool-result-block';
-          const title = document.createElement('div');
-          title.className = 'tool-block-title';
-          title.textContent = 'Output';
-          resultBlock.appendChild(title);
+          let rawResultStr = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
+          const hasDiffBlock = rawResultStr.includes('[diff_block_start]');
+          
+          const cleanOutputText = hasDiffBlock
+            ? rawResultStr.replace(/\[diff_block_start\][\s\S]*?\[diff_block_end\]/g, '').replace(/The following changes were made by the \w+ tool to:[^\n]*/g, '').trim()
+            : (diffStr && isDiffText(rawResultStr) ? '' : rawResultStr.trim());
 
-          const pre = document.createElement('pre');
-          pre.className = 'tool-json-pre';
-          let formattedResult = tc.result;
-          if (typeof formattedResult === 'string') {
+          if (cleanOutputText) {
+            hasContent = true;
+            const resultBlock = document.createElement('div');
+            resultBlock.className = 'tool-result-block';
+            const title = document.createElement('div');
+            title.className = 'tool-block-title';
+            title.textContent = 'Output';
+            resultBlock.appendChild(title);
+
+            const pre = document.createElement('pre');
+            pre.className = 'tool-json-pre';
+            let formattedResult: any = cleanOutputText;
             try {
-              const parsed = JSON.parse(formattedResult);
+              const parsed = JSON.parse(cleanOutputText);
               formattedResult = JSON.stringify(parsed, null, 2);
             } catch {}
-          } else {
-            formattedResult = JSON.stringify(formattedResult, null, 2);
-          }
-          if (typeof formattedResult === 'string') {
-            pre.innerHTML = renderDiffOrTextHtml(formattedResult);
-          } else {
-            pre.textContent = String(formattedResult);
-          }
-          resultBlock.appendChild(pre);
+            if (typeof formattedResult === 'string') {
+              pre.innerHTML = renderDiffOrTextHtml(formattedResult);
+            } else {
+              pre.textContent = String(formattedResult);
+            }
+            resultBlock.appendChild(pre);
 
-          if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
-            const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
-            const rawCmd = match ? match[1].trim() : '';
-            const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
+            if (typeof formattedResult === 'string' && (formattedResult.includes('[Permission Required]') || formattedResult.includes('User denied permission to run command:'))) {
+              const match = formattedResult.match(/(?:Command '|User denied permission to run command:\s*)([^'\n]+)/i);
+              const rawCmd = match ? match[1].trim() : '';
+              const cmd = rawCmd.replace(/^['"]|['"]$/g, '').trim();
 
-            const actionBar = document.createElement('div');
-            actionBar.className = 'perm-action-bar';
-            actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
+              const actionBar = document.createElement('div');
+              actionBar.className = 'perm-action-bar';
+              actionBar.style.cssText = 'margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;';
 
-            if (cmd) {
-              const displayCmd = cmd.length > 28 ? cmd.substring(0, 25) + '...' : cmd;
-              const yesBtn = document.createElement('button');
-              yesBtn.className = 'perm-btn perm-btn-primary';
-              yesBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
-              yesBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                yesBtn.disabled = true;
-                yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
-                if (sessionBtn) sessionBtn.disabled = true;
-                if (noBtn) noBtn.disabled = true;
+              if (cmd) {
+                const displayCmd = cmd.length > 28 ? cmd.substring(0, 25) + '...' : cmd;
+                const yesBtn = document.createElement('button');
+                yesBtn.className = 'perm-btn perm-btn-primary';
+                yesBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                yesBtn.textContent = `✓ Yes for '${displayCmd}'`;
+                yesBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  yesBtn.disabled = true;
+                  yesBtn.textContent = `✓ Yes for '${displayCmd}' - resuming...`;
+                  if (sessionBtn) sessionBtn.disabled = true;
+                  if (noBtn) noBtn.disabled = true;
 
-                currentStreamingMessage = {
-                  id: `a-${Date.now()}`,
-                  role: 'assistant',
-                  text: '',
-                  thinking: '',
-                  toolCalls: [],
-                  isStreaming: true,
-                };
-                messages.push(currentStreamingMessage);
-                renderAll(true);
-                setBusy(true);
+                  currentStreamingMessage = {
+                    id: `a-${Date.now()}`,
+                    role: 'assistant',
+                    text: '',
+                    thinking: '',
+                    toolCalls: [],
+                    isStreaming: true,
+                  };
+                  messages.push(currentStreamingMessage);
+                  renderAll(true);
+                  setBusy(true);
 
-                vscode.postMessage({ command: 'permissionResponse', choice: 'yes' });
-              });
-              actionBar.appendChild(yesBtn);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'yes' });
+                });
+                actionBar.appendChild(yesBtn);
 
-              const sessionBtn = document.createElement('button');
-              sessionBtn.className = 'perm-btn perm-btn-secondary';
-              sessionBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              sessionBtn.textContent = '✓ Yes for all commands in this session';
-              sessionBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                sessionBtn.disabled = true;
-                sessionBtn.textContent = '✓ Yes for session - resuming...';
-                if (yesBtn) yesBtn.disabled = true;
-                if (noBtn) noBtn.disabled = true;
+                const sessionBtn = document.createElement('button');
+                sessionBtn.className = 'perm-btn perm-btn-secondary';
+                sessionBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                sessionBtn.textContent = '✓ Yes for all commands in this session';
+                sessionBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  sessionBtn.disabled = true;
+                  sessionBtn.textContent = '✓ Yes for session - resuming...';
+                  if (yesBtn) yesBtn.disabled = true;
+                  if (noBtn) noBtn.disabled = true;
 
-                currentStreamingMessage = {
-                  id: `a-${Date.now()}`,
-                  role: 'assistant',
-                  text: '',
-                  thinking: '',
-                  toolCalls: [],
-                  isStreaming: true,
-                };
-                messages.push(currentStreamingMessage);
-                renderAll(true);
-                setBusy(true);
+                  currentStreamingMessage = {
+                    id: `a-${Date.now()}`,
+                    role: 'assistant',
+                    text: '',
+                    thinking: '',
+                    toolCalls: [],
+                    isStreaming: true,
+                  };
+                  messages.push(currentStreamingMessage);
+                  renderAll(true);
+                  setBusy(true);
 
-                vscode.postMessage({ command: 'permissionResponse', choice: 'session' });
-              });
-              actionBar.appendChild(sessionBtn);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'session' });
+                });
+                actionBar.appendChild(sessionBtn);
 
-              const noBtn = document.createElement('button');
-              noBtn.className = 'perm-btn perm-btn-cancel';
-              noBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              noBtn.textContent = '✕ No';
-              noBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                noBtn.disabled = true;
-                if (yesBtn) yesBtn.disabled = true;
-                if (sessionBtn) sessionBtn.disabled = true;
-                setBusy(false);
-                vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
-              });
-              actionBar.appendChild(noBtn);
+                const noBtn = document.createElement('button');
+                noBtn.className = 'perm-btn perm-btn-cancel';
+                noBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                noBtn.textContent = '✕ No';
+                noBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  noBtn.disabled = true;
+                  if (yesBtn) yesBtn.disabled = true;
+                  if (sessionBtn) sessionBtn.disabled = true;
+                  setBusy(false);
+                  vscode.postMessage({ command: 'permissionResponse', choice: 'no' });
+                });
+                actionBar.appendChild(noBtn);
 
-              const copyBtn = document.createElement('button');
-              copyBtn.className = 'perm-btn perm-btn-secondary';
-              copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
-              copyBtn.textContent = '📋 Copy Command';
-              copyBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                copyTextToClipboard(cmd, copyBtn);
-              });
-              actionBar.appendChild(copyBtn);
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'perm-btn perm-btn-secondary';
+                copyBtn.style.cssText = 'padding: 4px 10px; font-size: 11px; width: auto;';
+                copyBtn.textContent = '📋 Copy Command';
+                copyBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  copyTextToClipboard(cmd, copyBtn);
+                });
+                actionBar.appendChild(copyBtn);
+              }
+
+              resultBlock.appendChild(actionBar);
             }
 
-            resultBlock.appendChild(actionBar);
+            bodyInner.appendChild(resultBlock);
           }
-
-          bodyInner.appendChild(resultBlock);
         }
 
         if (!hasContent) {
@@ -948,6 +1087,8 @@ function renderAll(autoScrollForce: boolean = false) {
           tc.expanded = !tc.expanded;
           hintEl.textContent = tc.expanded ? '▼' : '(click to expand)';
           body.classList.toggle('open', tc.expanded);
+          header.classList.toggle('open', tc.expanded);
+          accordion.classList.toggle('open', tc.expanded);
           if (tc.expanded) {
             setTimeout(() => {
               accordion.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1130,86 +1271,116 @@ function esc(s: string): string {
 }
 
 function isDiffText(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
   const lines = text.split('\n');
-  let hasAdd = false;
-  let hasDel = false;
-  let hasHdr = false;
 
   for (const line of lines) {
-    if (line.startsWith('diff --git') || line.startsWith('index ') || (line.startsWith('--- ') && lines.some(l => l.startsWith('+++ ')))) {
-      hasHdr = true;
-    }
-    if (/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line)) {
-      hasHdr = true;
-    }
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      hasAdd = true;
-    }
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      hasDel = true;
+    if (
+      line.startsWith('diff --git') ||
+      line.startsWith('index ') ||
+      (line.startsWith('--- ') && lines.some(l => l.startsWith('+++ '))) ||
+      /^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/.test(line) ||
+      line.startsWith('@@ ')
+    ) {
+      return true;
     }
   }
 
-  return hasHdr || (hasAdd && hasDel) || (hasAdd && lines.length <= 15) || (hasDel && lines.length <= 15);
+  return false;
 }
 
-function buildDiffFromToolArgs(toolName: string, rawArgs: any): string | null {
-  if (!rawArgs) return null;
+function extractTargetFile(toolName: string, rawArgs: any, rawResult?: any): string | undefined {
   let args = rawArgs;
   if (typeof args === 'string') {
     try { args = JSON.parse(args); } catch {}
   }
-  if (typeof args !== 'object' || !args) return null;
+  if (typeof args === 'object' && args) {
+    const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file;
+    if (file && typeof file === 'string') return file;
+  }
+  if (rawResult && typeof rawResult === 'string') {
+    const match = rawResult.match(/(?:to|file):\s*([^\s\n\.\,\:]+\.[a-zA-Z0-9]+)/i) || rawResult.match(/(?:\-\-\-\s*a\/|\+\+\+\s*b\/)([^\s\n]+)/);
+    if (match && match[1]) return match[1];
+  }
+  return undefined;
+}
 
-  const name = toolName.toLowerCase();
+function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?: any): string | null {
+  const name = (toolName || '').toLowerCase();
   const normName = name.replace(/[-_]/g, '');
-  const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
-  const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
 
-  let diffLines: string[] = [];
+  let args = rawArgs;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch {}
+  }
 
-  if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
-    const target = args.TargetContent || args.targetContent || args.target_content || '';
-    const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
-    if (target || replacement) {
-      diffLines.push(`--- a/${fileName}`);
-      diffLines.push(`+++ b/${fileName}`);
-      diffLines.push(`@@ edit @@`);
-      if (target) {
-        String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
-      }
-      if (replacement) {
-        String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
-      }
+  // 1. Try extracting diff from rawResult if present (e.g. agy tool output containing [diff_block_start]...[diff_block_end])
+  if (rawResult && typeof rawResult === 'string') {
+    const diffBlockMatch = rawResult.match(/\[diff_block_start\]([\s\S]*?)\[diff_block_end\]/);
+    if (diffBlockMatch && diffBlockMatch[1].trim()) {
+      return diffBlockMatch[1].trim();
     }
-  } else if (normName.includes('multireplacefilecontent')) {
-    const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
-    if (Array.isArray(chunks) && chunks.length > 0) {
-      diffLines.push(`--- a/${fileName}`);
-      diffLines.push(`+++ b/${fileName}`);
-      chunks.forEach((chunk: any, idx: number) => {
-        diffLines.push(`@@ chunk ${idx + 1} @@`);
-        const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
-        const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
+  }
+
+  // 2. Build diff from args if present
+  if (typeof args === 'object' && args) {
+    const file = args.TargetFile || args.targetFile || args.target_file || args.path || args.file || '';
+    const fileName = file ? String(file).replace(/^"|"$/g, '').split(/[\/\\]/).pop() : 'file';
+
+    let diffLines: string[] = [];
+
+    if (normName.includes('replacefilecontent') && !normName.includes('multi')) {
+      const target = args.TargetContent || args.targetContent || args.target_content || '';
+      const replacement = args.ReplacementContent || args.replacementContent || args.replacement_content || '';
+      if (target || replacement) {
+        diffLines.push(`--- a/${fileName}`);
+        diffLines.push(`+++ b/${fileName}`);
+        diffLines.push(`@@ edit @@`);
         if (target) {
           String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
         }
         if (replacement) {
           String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
         }
-      });
+      }
+    } else if (normName.includes('multireplacefilecontent')) {
+      const chunks = args.ReplacementChunks || args.replacementChunks || args.replacement_chunks || args.chunks || [];
+      if (Array.isArray(chunks) && chunks.length > 0) {
+        diffLines.push(`--- a/${fileName}`);
+        diffLines.push(`+++ b/${fileName}`);
+        chunks.forEach((chunk: any, idx: number) => {
+          diffLines.push(`@@ chunk ${idx + 1} @@`);
+          const target = chunk.TargetContent || chunk.targetContent || chunk.target_content || '';
+          const replacement = chunk.ReplacementContent || chunk.replacementContent || chunk.replacement_content || '';
+          if (target) {
+            String(target).split('\n').forEach((l: string) => diffLines.push(`-${l}`));
+          }
+          if (replacement) {
+            String(replacement).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+          }
+        });
+      }
+    } else if (normName.includes('writetofile') || normName.includes('writefile')) {
+      const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
+      if (code) {
+        diffLines.push(`--- /dev/null`);
+        diffLines.push(`+++ b/${fileName}`);
+        diffLines.push(`@@ new file @@`);
+        String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+      }
     }
-  } else if (normName.includes('writetofile') || normName.includes('writefile')) {
-    const code = args.CodeContent || args.codeContent || args.code_content || args.code || '';
-    if (code) {
-      diffLines.push(`--- /dev/null`);
-      diffLines.push(`+++ b/${fileName}`);
-      diffLines.push(`@@ new file @@`);
-      String(code).split('\n').forEach((l: string) => diffLines.push(`+${l}`));
+
+    if (diffLines.length > 0) {
+      return diffLines.join('\n');
     }
   }
 
-  return diffLines.length > 0 ? diffLines.join('\n') : null;
+  // 3. Fallback to rawResult diff if it contains unified diff format
+  if (rawResult && typeof rawResult === 'string' && isDiffText(rawResult)) {
+    return rawResult.trim();
+  }
+
+  return null;
 }
 
 function renderDiffOrTextHtml(text: string): string {
@@ -1487,20 +1658,116 @@ window.addEventListener('message', (event) => {
       renderHistoryDropdown(data.sessions, data.currentId);
       break;
 
-    case 'sessionSelected':
-      messages = [{
-        id: `sys-${Date.now()}`,
-        role: 'assistant',
-        text: `Switched session to ${data.conversationId.substring(0, 8)}. Session permissions reset.`
-      }];
+    case 'sessionLoaded': {
+      activeConversationId = data.conversationId;
+      messages = [];
       currentStreamingMessage = null;
-      renderAll();
+
+      if (headerSessionTitle) {
+        headerSessionTitle.textContent = data.title || (data.conversationId ? `Session ${data.conversationId.substring(0, 8)}` : 'Untitled');
+      }
+
+      if (data.events && Array.isArray(data.events)) {
+        let currentAssistantMsg: Message | null = null;
+        for (const evt of data.events) {
+          if (evt.type === 'userMessage') {
+            currentAssistantMsg = null;
+            messages.push({
+              id: `msg-${Date.now()}-${Math.random()}`,
+              role: 'user',
+              text: evt.text
+            });
+          } else if (evt.type === 'assistantText') {
+            if (!currentAssistantMsg) {
+              currentAssistantMsg = {
+                id: `msg-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                text: evt.text
+              };
+              messages.push(currentAssistantMsg);
+            } else {
+              currentAssistantMsg.text = (currentAssistantMsg.text ? currentAssistantMsg.text + '\n' : '') + evt.text;
+            }
+          } else if (evt.type === 'toolCall') {
+            if (!currentAssistantMsg) {
+              currentAssistantMsg = {
+                id: `msg-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                text: '',
+                toolCalls: []
+              };
+              messages.push(currentAssistantMsg);
+            }
+            if (!currentAssistantMsg.toolCalls) {
+              currentAssistantMsg.toolCalls = [];
+            }
+            currentAssistantMsg.toolCalls.push({
+              id: `tc-${Date.now()}-${Math.random()}`,
+              name: evt.name,
+              args: evt.args,
+              result: evt.result,
+              status: evt.status || 'done'
+            });
+          }
+        }
+      }
+
+      renderAll(true);
+      break;
+    }
+
+    case 'updateTitle':
+      if (headerSessionTitle && data.title) {
+        headerSessionTitle.textContent = data.title;
+      }
       break;
   }
 });
 
 vscode.postMessage({ command: 'getActiveFile' });
 vscode.postMessage({ command: 'getSlashCommands' });
+vscode.postMessage({ command: 'getSessions' });
+
+let activeConversationId: string | null = null;
+
+const headerSessionTitle = document.getElementById('header-session-title') as HTMLElement;
+const editHeaderTitleBtn = document.getElementById('edit-header-title-btn') as HTMLButtonElement;
+
+if (headerSessionTitle && editHeaderTitleBtn) {
+  const triggerHeaderRename = () => {
+    const currentTitle = headerSessionTitle.textContent || 'Untitled';
+    const inputEl = document.createElement('input');
+    inputEl.type = 'text';
+    inputEl.className = 'header-title-rename-input';
+    inputEl.value = currentTitle;
+    headerSessionTitle.replaceWith(inputEl);
+    inputEl.focus();
+    inputEl.select();
+
+    const saveHeaderTitle = () => {
+      const newTitle = inputEl.value.trim();
+      if (newTitle && activeConversationId) {
+        vscode.postMessage({ command: 'renameSession', conversationId: activeConversationId, title: newTitle });
+      }
+      inputEl.replaceWith(headerSessionTitle);
+      if (newTitle) headerSessionTitle.textContent = newTitle;
+    };
+
+    inputEl.addEventListener('blur', saveHeaderTitle);
+    inputEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        inputEl.blur();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        inputEl.replaceWith(headerSessionTitle);
+      }
+    });
+  };
+
+  editHeaderTitleBtn.addEventListener('click', triggerHeaderRename);
+  headerSessionTitle.addEventListener('dblclick', triggerHeaderRename);
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -1511,50 +1778,125 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
+let cachedSessionsList: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }> = [];
+
 function renderHistoryDropdown(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }>, currentId?: string | null) {
   if (!historyDropdown) return;
-  if (!sessions || sessions.length === 0) {
-    historyDropdown.innerHTML = `
-      <div class="history-header">
-        <span>Session History</span>
-      </div>
-      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
-        No previous sessions found.
-      </div>
-    `;
-    return;
-  }
+  cachedSessionsList = sessions || [];
+  renderFilteredSessions(cachedSessionsList, currentId, '');
+}
+
+function renderFilteredSessions(sessions: Array<{ id: string; title: string; updatedAt: number; relativeTime: string }>, currentId?: string | null, searchQuery = '') {
+  if (!historyDropdown) return;
+
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = query
+    ? sessions.filter(s => s.title.toLowerCase().includes(query) || s.id.toLowerCase().includes(query))
+    : sessions;
 
   let html = `
     <div class="history-header">
       <span>Session History</span>
-      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${sessions.length} sessions</span>
+      <span style="font-size: 9px; font-weight: normal; text-transform: none;">${filtered.length} sessions</span>
     </div>
+    <div class="history-search-container">
+      <input type="text" id="history-search-input" placeholder="Search sessions..." value="${escapeHtml(searchQuery)}" autocomplete="off" />
+    </div>
+    <div class="history-items-list">
   `;
 
-  for (const s of sessions) {
-    const isActive = currentId && currentId === s.id;
+  if (filtered.length === 0) {
     html += `
-      <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
-        <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
-        <div class="history-item-meta">
-          <span>${s.id.substring(0, 8)}</span>
-          <span>${s.relativeTime}</span>
-        </div>
+      <div style="padding: 12px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+        No matching sessions found.
       </div>
     `;
+  } else {
+    for (const s of filtered) {
+      const isActive = currentId && currentId === s.id;
+      html += `
+        <div class="history-item ${isActive ? 'active' : ''}" data-id="${s.id}">
+          <div class="history-item-content">
+            <div class="history-item-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
+            <div class="history-item-meta">
+              <span class="history-item-id">${s.id.substring(0, 8)}</span>
+              <span class="history-item-time">${s.relativeTime}</span>
+            </div>
+          </div>
+          <button class="history-item-edit-btn icon-btn" title="Rename session" data-id="${s.id}">&#9999;&#65039;</button>
+        </div>
+      `;
+    }
   }
 
+  html += `</div>`;
   historyDropdown.innerHTML = html;
+
+  const searchInput = historyDropdown.querySelector('#history-search-input') as HTMLInputElement;
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      renderFilteredSessions(cachedSessionsList, currentId, (e.target as HTMLInputElement).value);
+    });
+    if (searchQuery) {
+      searchInput.focus();
+      searchInput.setSelectionRange(searchQuery.length, searchQuery.length);
+    }
+  }
 
   const items = historyDropdown.querySelectorAll('.history-item');
   items.forEach((item) => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.history-item-edit-btn')) {
+        return;
+      }
       const convId = item.getAttribute('data-id');
       if (convId) {
         historyDropdown.style.display = 'none';
         vscode.postMessage({ command: 'selectSession', conversationId: convId });
       }
+    });
+  });
+
+  const editBtns = historyDropdown.querySelectorAll('.history-item-edit-btn');
+  editBtns.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const convId = btn.getAttribute('data-id');
+      if (!convId) return;
+      const targetSession = cachedSessionsList.find(s => s.id === convId);
+      const currentTitle = targetSession ? targetSession.title : '';
+      const itemEl = btn.closest('.history-item');
+      if (!itemEl) return;
+      const titleEl = itemEl.querySelector('.history-item-title') as HTMLElement;
+      if (!titleEl) return;
+
+      const inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.className = 'history-item-rename-input';
+      inputEl.value = currentTitle;
+      titleEl.replaceWith(inputEl);
+      inputEl.focus();
+      inputEl.select();
+
+      const save = () => {
+        const newTitle = inputEl.value.trim();
+        if (newTitle && newTitle !== currentTitle) {
+          vscode.postMessage({ command: 'renameSession', conversationId: convId, title: newTitle });
+        } else {
+          inputEl.replaceWith(titleEl);
+        }
+      };
+
+      inputEl.addEventListener('blur', save);
+      inputEl.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          inputEl.blur();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          inputEl.replaceWith(titleEl);
+        }
+      });
     });
   });
 }

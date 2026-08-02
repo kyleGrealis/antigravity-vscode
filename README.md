@@ -77,7 +77,14 @@ This extension contributes the following settings (`antigravity.*`):
 
 [MIT License](LICENSE.txt)
 
----
+## Contributing & Community
 
-Contributors welcome!
+Contributions, feature requests, and bug reports are warmly welcome!
+
+- **Issues & Feature Requests**: [Open an issue](https://github.com/kyleGrealis/antigravity-vscode/issues) on GitHub.
+- **Pull Requests**: Feel free to submit a [pull request](https://github.com/kyleGrealis/antigravity-vscode/pulls) with improvements or bug fixes.
+- **Repository**: Visit [github.com/kyleGrealis/antigravity-vscode](https://github.com/kyleGrealis/antigravity-vscode) for the source code and updates.
+
+Collaborators welcome!
+
 

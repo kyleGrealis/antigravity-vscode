@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext) {
   const processManager = new AgyProcessManager();
   const diffController = new DiffController();
 
-  const webviewProvider = new ChatWebviewProvider(context.extensionUri, processManager, diffController);
+  const webviewProvider = new ChatWebviewProvider(context.extensionUri, processManager, diffController, context);
 
   // Register Webview View for Sidebar
   context.subscriptions.push(

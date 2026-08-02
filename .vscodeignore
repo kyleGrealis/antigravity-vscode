@@ -1,0 +1,7 @@
+.antigravity/**
+.gemini/**
+.vscode/**
+*.vsix
+src/**
+tsconfig.json
+esbuild.js
