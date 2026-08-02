@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as path from 'path';
 import { EventEmitter } from 'events';
 import { AgyStreamEvent } from './types';
 
@@ -37,9 +38,20 @@ export class AgyProcessManager extends EventEmitter {
 
     const args: string[] = ['--output-format', 'stream-json', '-p', prompt];
 
-
     if (cwd) {
       args.push('--add-dir', cwd);
+    }
+
+    if (options.images && options.images.length > 0) {
+      const normCwd = path.resolve(cwd).replace(/\\/g, '/').toLowerCase();
+      for (const imgPath of options.images) {
+        const normalized = path.resolve(imgPath).replace(/\\/g, '/');
+        const imgDir = path.dirname(normalized);
+        const normImgDir = imgDir.toLowerCase();
+        if (normImgDir && normImgDir !== normCwd && !normImgDir.startsWith(normCwd + '/')) {
+          args.push('--add-dir', imgDir);
+        }
+      }
     }
 
     if (this.currentConversationId) {
@@ -54,7 +66,7 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--effort', options.effort.trim());
     }
 
-    if (options.dangerouslySkipPermissions !== false) {
+    if (options.dangerouslySkipPermissions === true) {
       args.push('--dangerously-skip-permissions');
     }
 
@@ -74,7 +86,12 @@ export class AgyProcessManager extends EventEmitter {
       if (!trimmed) return;
 
       try {
-        const parsed: AgyStreamEvent = JSON.parse(trimmed);
+        const parsed: any = JSON.parse(trimmed);
+        const eventType = parsed.event || parsed.type;
+        const normalizedEvent: AgyStreamEvent = {
+          ...parsed,
+          event: eventType,
+        };
 
         if (parsed.conversation_id) {
           this.currentConversationId = parsed.conversation_id;
@@ -86,9 +103,9 @@ export class AgyProcessManager extends EventEmitter {
           this.currentConversationId = parsed.result.conversation_id;
         }
 
-        this.emit('event', parsed);
+        this.emit('event', normalizedEvent);
 
-        if (parsed.event === 'result') {
+        if (eventType === 'result') {
           this.turnActive = false;
         }
       } catch {
@@ -105,12 +122,14 @@ export class AgyProcessManager extends EventEmitter {
       }
     });
 
+    let stderrOutput = '';
     this.process.stderr?.on('data', (data: Buffer) => {
       const msg = data.toString('utf-8');
-      if (msg.includes('error') || msg.includes('Error') || msg.includes('fatal')) {
+      stderrOutput += msg;
+      if (msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fatal') || msg.toLowerCase().includes('failed')) {
         this.emit('event', {
           event: 'error',
-          error: msg,
+          error: msg.trim(),
         } as AgyStreamEvent);
       }
     });
@@ -119,6 +138,13 @@ export class AgyProcessManager extends EventEmitter {
       this.process = null;
       this.rl = null;
       this.turnActive = false;
+      if (code !== 0 && code !== null) {
+        const errorText = stderrOutput.trim() || `Process exited with code ${code}`;
+        this.emit('event', {
+          event: 'error',
+          error: errorText,
+        } as AgyStreamEvent);
+      }
       this.emit('close', code);
     });
 

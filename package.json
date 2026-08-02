@@ -2,9 +2,14 @@
 	"name": "antigravity-vscode",
 	"displayName": "Antigravity for VS Code",
 	"description": "Antigravity CLI inside VS Code: Harness the power of Google Antigravity directly in your editor",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"publisher": "antigravity",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/kyleGrealis/antigravity-vscode.git"
+	},
+	"icon": "media/antigravity-icon.png",
 	"engines": {
 		"vscode": "^1.85.0"
 	},
@@ -33,15 +38,10 @@
 					"default": "agy",
 					"description": "Path or executable name for the Antigravity CLI binary."
 				},
-				"antigravity.useTerminal": {
-					"type": "boolean",
-					"default": false,
-					"description": "Launch Antigravity as an interactive terminal tab in the editor grid instead of the webview."
-				},
 				"antigravity.dangerouslySkipPermissions": {
 					"type": "boolean",
-					"default": true,
-					"description": "Auto-approve all tool permission requests without prompting. Required for webview mode since there is no interactive permission handler."
+					"default": false,
+					"description": "Auto-approve all tool permission requests without prompting. When disabled (recommended), Antigravity will prompt for permission before executing tools."
 				},
 				"antigravity.model": {
 					"type": "string",
@@ -73,11 +73,6 @@
 				"icon": "$(layout-sidebar-right)"
 			},
 			{
-				"command": "antigravity-vscode.terminal.open",
-				"title": "Antigravity: Open in Terminal",
-				"icon": "$(terminal)"
-			},
-			{
 				"command": "antigravity-vscode.newConversation",
 				"title": "Antigravity: New Conversation",
 				"icon": "$(add)"
@@ -96,7 +91,8 @@
 			},
 			{
 				"command": "antigravity-vscode.focus",
-				"title": "Antigravity: Focus Input"
+				"title": "Antigravity: Focus Input",
+				"icon": "$(keyboard)"
 			}
 		],
 		"keybindings": [
@@ -129,7 +125,8 @@
 				{
 					"type": "webview",
 					"id": "antigravityVSCodeSidebar",
-					"name": "Antigravity"
+					"name": "Antigravity",
+					"icon": "media/antigravity-icon.svg"
 				}
 			]
 		},
@@ -147,7 +144,6 @@
 				},
 				{
 					"command": "antigravity-vscode.editor.open",
-					"when": "!config.antigravity.useTerminal",
 					"group": "navigation"
 				}
 			]
