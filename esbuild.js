@@ -17,20 +17,26 @@ function syncToInstalledExtension() {
     if (!fs.existsSync(extensionsDir)) return;
 
     const targetDir = path.join(extensionsDir, `antigravity.antigravity-vscode-${pkg.version}`);
-    let syncPath = fs.existsSync(targetDir) ? targetDir : null;
 
-    if (!syncPath) {
-      const entries = fs.readdirSync(extensionsDir);
-      const match = entries.find(e => e.startsWith('antigravity.antigravity-vscode-'));
-      if (match) {
-        syncPath = path.join(extensionsDir, match);
-      }
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    if (syncPath) {
-      fs.cpSync('dist', path.join(syncPath, 'dist'), { recursive: true });
-      fs.cpSync('media', path.join(syncPath, 'media'), { recursive: true });
-      console.log(`Synced build to ${syncPath}`);
+    fs.cpSync('dist', path.join(targetDir, 'dist'), { recursive: true });
+    fs.cpSync('media', path.join(targetDir, 'media'), { recursive: true });
+    for (const f of ['package.json', 'README.md', 'NEWS.md']) {
+      if (fs.existsSync(path.join(__dirname, f))) {
+        fs.copyFileSync(path.join(__dirname, f), path.join(targetDir, f));
+      }
+    }
+    console.log(`Synced build to ${targetDir}`);
+
+    const entries = fs.readdirSync(extensionsDir);
+    for (const e of entries) {
+      if (e.startsWith('antigravity.antigravity-vscode-') && e !== path.basename(targetDir)) {
+        fs.rmSync(path.join(extensionsDir, e), { recursive: true, force: true });
+        console.log(`Removed old extension: ${e}`);
+      }
     }
   } catch (err) {
     console.error('Failed to sync to installed extension:', err);
