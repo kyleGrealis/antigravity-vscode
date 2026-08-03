@@ -117,7 +117,7 @@ export function renderPlanCard(plan: { filePath: string; timestamp: string; titl
 
     const approveBtn = document.createElement('button');
     approveBtn.className = 'plan-btn plan-btn-primary';
-    approveBtn.textContent = 'Approve & Execute Plan';
+    approveBtn.textContent = 'Approve & Proceed';
     approveBtn.onclick = (e) => {
       e.stopPropagation();
       (plan as any).isApproved = true;

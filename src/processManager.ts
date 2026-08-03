@@ -126,12 +126,7 @@ export class AgyProcessManager extends EventEmitter {
     proc.stderr?.on('data', (data: Buffer) => {
       const msg = data.toString('utf-8');
       stderrOutput += msg;
-      if (msg.toLowerCase().includes('error') || msg.toLowerCase().includes('fatal') || msg.toLowerCase().includes('failed')) {
-        this.emit('event', {
-          event: 'error',
-          error: msg.trim(),
-        } as AgyStreamEvent);
-      }
+      this.emit('stderr', msg);
     });
 
     proc.on('close', (code: number) => {

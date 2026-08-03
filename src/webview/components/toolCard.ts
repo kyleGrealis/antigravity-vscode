@@ -1,6 +1,6 @@
 import { ToolCall } from '../types';
 import { esc } from '../utils/escape';
-import { toPascalCaseName, formatToolSummary, formatToolArgsForDisplay } from '../utils/formatters';
+import { toPascalCaseName, formatToolSummary, formatToolArgsForDisplay, parseJsonArgs, getArgVal } from '../utils/formatters';
 import { buildDiffFromToolArgs, extractTargetFile, extractStringResult, renderDiffOrTextHtml } from '../utils/diffBuilder';
 
 export function renderToolCallCard(
@@ -47,6 +47,41 @@ export function renderToolCallCard(
 
   header.appendChild(statusIcon);
   header.appendChild(callSigEl);
+
+  const isTaskTool = ['manage_task', 'managetask', 'invoke_subagent', 'invokesubagent'].includes((tc.name || '').toLowerCase().replace(/[^a-z_]/g, ''));
+  if (isTaskTool && statusClass === 'running') {
+    const taskMeta = document.createElement('span');
+    taskMeta.className = 'task-running-meta';
+
+    const elapsed = document.createElement('span');
+    elapsed.className = 'task-elapsed';
+    const startTime = Date.now();
+    elapsed.textContent = '0s';
+    const timer = setInterval(() => {
+      const secs = Math.floor((Date.now() - startTime) / 1000);
+      elapsed.textContent = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+      if (tc.status !== 'running') {
+        clearInterval(timer);
+        taskMeta.remove();
+      }
+    }, 1000);
+
+    const killBtn = document.createElement('button');
+    killBtn.className = 'task-kill-btn';
+    killBtn.textContent = 'Kill';
+    killBtn.title = 'Cancel this task';
+    killBtn.onclick = (e) => {
+      e.stopPropagation();
+      const parsedArgs = parseJsonArgs(tc.args);
+      const taskId = getArgVal(parsedArgs, 'TaskId', 'taskId', 'task_id') || tc.id;
+      postMessage({ command: 'killTask', taskId: taskId });
+    };
+
+    taskMeta.appendChild(elapsed);
+    taskMeta.appendChild(killBtn);
+    header.appendChild(taskMeta);
+  }
+
   header.appendChild(hintEl);
 
   const body = document.createElement('div');

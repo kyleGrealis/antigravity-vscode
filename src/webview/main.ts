@@ -11,6 +11,7 @@ import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering,
 import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
 import { initSessionHistory, updateWorkspaceHeaderBadge, renderHistoryDropdown } from './controllers/sessionHistory';
 import { initPlanCard, renderPlanCard, renderClarificationCard } from './controllers/planCard';
+import { initTaskTracker, processToolCallForTasks, clearTaskTracker } from './controllers/taskTracker';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -44,6 +45,18 @@ const historyDropdown = document.getElementById('history-dropdown') as HTMLEleme
 const attachImgBtn = document.getElementById('attach-img-btn') as HTMLButtonElement;
 const imageBar = document.getElementById('image-attachment-bar') as HTMLElement;
 const statusEl = document.getElementById('status-text') as HTMLElement;
+const planConfirmBar = document.getElementById('plan-confirm-bar') as HTMLElement;
+const planConfirmYes = document.getElementById('plan-confirm-yes') as HTMLButtonElement;
+const planConfirmNo = document.getElementById('plan-confirm-no') as HTMLButtonElement;
+
+planConfirmYes.addEventListener('click', () => {
+  planConfirmBar.style.display = 'none';
+  vscode.postMessage({ command: 'planConfirmResponse', choice: 'yes' });
+});
+planConfirmNo.addEventListener('click', () => {
+  planConfirmBar.style.display = 'none';
+  vscode.postMessage({ command: 'planConfirmResponse', choice: 'no' });
+});
 const fileChip = document.getElementById('active-file-context') as HTMLElement;
 const contextBar = document.getElementById('context-bar') as HTMLElement;
 const slashMenu = document.getElementById('slash-menu') as HTMLElement;
@@ -52,6 +65,10 @@ const atMenu = document.getElementById('at-menu') as HTMLElement;
 initAtMenu(input, atMenu, (msg: any) => vscode.postMessage(msg));
 initSlashMenu(input, slashMenu);
 initMermaidController(copyTextToClipboard);
+initTaskTracker(
+  document.getElementById('task-tracker') as HTMLElement,
+  (msg: any) => vscode.postMessage(msg)
+);
 initSessionHistory(historyDropdown, (msg: any) => vscode.postMessage(msg));
 initPlanCard({
   getMessages: () => messages,
@@ -371,6 +388,7 @@ cancelBtn?.addEventListener('click', () => {
 newChatBtn?.addEventListener('click', () => {
   messages = [];
   currentStreamingMessage = null;
+  clearTaskTracker();
   renderAll();
   vscode.postMessage({ command: 'newConversation' });
 });
@@ -496,6 +514,17 @@ function sendPrompt() {
   if (planAnywhere) {
     const before = text.slice(0, planAnywhere.index!).trim();
     const after = (planAnywhere[1] || '').trim();
+    const planArg = [before, after].filter(Boolean).join(' ') || undefined;
+    input.value = '';
+    input.style.height = 'auto';
+    executeSlashCommand('plan', planArg);
+    return;
+  }
+
+  const enterPlanMatch = text.match(/\benter\s+plan\s+mode\b\s*(.*)/i);
+  if (enterPlanMatch) {
+    const before = text.slice(0, enterPlanMatch.index!).trim();
+    const after = (enterPlanMatch[1] || '').trim();
     const planArg = [before, after].filter(Boolean).join(' ') || undefined;
     input.value = '';
     input.style.height = 'auto';
@@ -1256,6 +1285,7 @@ window.addEventListener('message', (event) => {
             expanded: isPermError || data.status === 'error',
           });
         }
+        processToolCallForTasks(data.name, data.args, data.result, data.status);
         renderAll();
       }
       break;
@@ -1313,6 +1343,12 @@ window.addEventListener('message', (event) => {
       } else {
         hideAtMenu();
       }
+      break;
+    }
+
+    case 'planConfirm': {
+      const bar = document.getElementById('plan-confirm-bar');
+      if (bar) bar.style.display = 'flex';
       break;
     }
 

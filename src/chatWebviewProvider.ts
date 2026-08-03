@@ -116,6 +116,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this.processManager.on('event', (event: AgyStreamEvent) => {
       this.handleAgyEvent(event);
     });
+    this.processManager.on('stderr', (msg: string) => {
+      if (!this.debugChannel) {
+        this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
+      }
+      this.debugChannel.appendLine(`[stderr] ${msg.trimEnd()}`);
+    });
     this.processManager.on('cancelled', () => {
       if (this.isSteeringPivot) {
         return;
@@ -284,6 +290,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           this.processManager.cancelCurrentTask();
           this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
           break;
+
+        case 'killTask': {
+          const taskId = message.taskId;
+          if (taskId) {
+            const cancelPrompt = `[SYSTEM] Cancel the running task with ID "${taskId}". Use the manage_task tool with Action "cancel" and TaskId "${taskId}".`;
+            this.onUserPrompt(cancelPrompt, []);
+          }
+          break;
+        }
+
+        case 'planConfirmResponse': {
+          const pending = this.pendingPlanPrompt;
+          this.pendingPlanPrompt = null;
+          if (!pending) break;
+          if (message.choice === 'yes') {
+            const planArg = pending.promptText.replace(pending.planHintRe, '').trim() || 'Feature Plan';
+            this.handleSlashCommand('plan', planArg);
+          } else {
+            this.dispatchPrompt(pending.promptText, pending.images, pending.dangerouslySkipPermissions);
+          }
+          break;
+        }
 
         case 'permissionResponse':
           this.handlePermissionResponse(message.choice);
@@ -724,6 +752,18 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     this.lastUserPrompt = { promptText, images };
+
+    const planHintRe = /\b(?:mak(?:e|ing)|creat(?:e|ing)|writ(?:e|ing)|draft(?:ing)?|build(?:ing)?)\s+(?:a\s+|an\s+|the\s+)?(?:implementation\s+)?plan\b/i;
+    if (!promptText.startsWith('[PLAN MODE]') && planHintRe.test(promptText)) {
+      this.pendingPlanPrompt = { promptText, images, dangerouslySkipPermissions, planHintRe };
+      this.getWebviews().forEach((wv) => wv.postMessage({ type: 'planConfirm' }));
+      return;
+    }
+
+    this.dispatchPrompt(promptText, images, dangerouslySkipPermissions);
+  }
+
+  private dispatchPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
     const effectiveSkip = dangerouslySkipPermissions !== undefined
@@ -1098,6 +1138,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private activePlanFilePath: string | null = null;
+  private pendingPlanPrompt: { promptText: string; images?: string[]; dangerouslySkipPermissions?: boolean; planHintRe: RegExp } | null = null;
   private debugChannel: vscode.OutputChannel | null = null;
   private fileSnapshots: Map<string, string> = new Map();
 
@@ -1173,6 +1214,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
                          parsed?.FilePath || parsed?.filePath;
 
       if (!targetFile || !targetFile.endsWith('.md')) return;
+      const baseName = path.basename(targetFile).toLowerCase();
+      if (!baseName.includes('plan')) return;
 
       setTimeout(() => {
         try {
@@ -1632,7 +1675,15 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 			</div>
 		</div>
 
-		<div class="input-area">
+		<div id="task-tracker" class="task-tracker" style="display: none;"></div>
+			<div id="plan-confirm-bar" class="plan-confirm-bar" style="display: none;">
+				<span class="plan-confirm-text">It looks like you want a plan. Enter plan mode?</span>
+				<div class="plan-confirm-actions">
+					<button id="plan-confirm-yes" class="plan-confirm-btn plan-confirm-yes">Yes, plan mode</button>
+					<button id="plan-confirm-no" class="plan-confirm-btn plan-confirm-no">No, just send it</button>
+				</div>
+			</div>
+			<div class="input-area">
 			<div class="input-row">
 				<div id="slash-menu" class="slash-menu" style="display: none;"></div>
 				<div id="at-menu" class="at-menu" style="display: none;"></div>

@@ -658,6 +658,135 @@ html, body {
   margin: 0 1px;
 }
 
+/* Task Tracker */
+.task-tracker {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 16px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.task-tracker-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.task-tracker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-tracker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.task-tracker-id {
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--text-primary);
+}
+
+.task-tracker-elapsed {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+/* Plan Confirm Bar */
+.plan-confirm-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.plan-confirm-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.plan-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.plan-confirm-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.plan-confirm-btn:hover {
+  background: var(--bg-active);
+}
+
+.plan-confirm-yes {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+  border-color: transparent;
+}
+
+.plan-confirm-yes:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+/* Task Running Meta */
+.task-running-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-right: 8px;
+  flex-shrink: 0;
+}
+
+.task-elapsed {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-kill-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 80, 80, 0.4);
+  background: rgba(255, 50, 50, 0.15);
+  color: #ff6b6b;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.task-kill-btn:hover {
+  background: rgba(255, 50, 50, 0.3);
+  border-color: rgba(255, 80, 80, 0.6);
+}
+
 /* Input Area */
 .input-area {
   border-top: 1px solid var(--border);
