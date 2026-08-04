@@ -1,6 +1,6 @@
 # Antigravity for VS Code
 
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.png)](LICENSE.txt)
 
 Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and Positron.
@@ -48,9 +48,9 @@ Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and 
 3. Select **Extensions: Install from VSIX...** and choose the downloaded file.
 
 ```bash
-code --install-extension antigravity-vscode-0.1.6.vsix
+code --install-extension antigravity-vscode-0.2.0.vsix
 # or for Positron:
-positron --install-extension antigravity-vscode-0.1.6.vsix
+positron --install-extension antigravity-vscode-0.2.0.vsix
 ```
 
 ---

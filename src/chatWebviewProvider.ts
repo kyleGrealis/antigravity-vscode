@@ -90,7 +90,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     if (restoredId) {
       const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
       const convDir = path.join(brainDir, restoredId);
-      if (fs.existsSync(convDir)) {
+      const hasTranscript = fs.existsSync(convDir) &&
+        fs.readdirSync(convDir).some(f => f.endsWith('.jsonl'));
+      if (hasTranscript) {
         const wsInfo = this.getSessionWorkspace(restoredId, convDir);
         if (!this.isWorkspaceMatch(wsInfo.workspacePath, activeWorkspacePath)) {
           restoredId = undefined;
@@ -121,6 +123,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
       }
       this.debugChannel.appendLine(`[stderr] ${msg.trimEnd()}`);
+    });
+    this.processManager.on('timing', (info: { phase: string; ms: number }) => {
+      if (!this.debugChannel) {
+        this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
+      }
+      this.debugChannel.appendLine(`[timing] ${info.phase}: ${(info.ms / 1000).toFixed(2)}s`);
     });
     this.processManager.on('cancelled', () => {
       if (this.isSteeringPivot) {
@@ -418,6 +426,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'selectSession': {
           this.sessionSkipPermissions = false;
           this.sessionAllowedCommands.clear();
+          this.processManager.killProcess();
           this.processManager.setConversationId(message.conversationId);
           if (this.context) {
             this.context.workspaceState.update('activeConversationId', message.conversationId);
@@ -608,6 +617,27 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   private buildPromptWithIdeContext(userPrompt: string, isFirstTurn: boolean, cwd: string, images?: string[]): string {
     const parts: string[] = [];
+
+    if (isFirstTurn) {
+      const geminiMdPath = path.join(cwd, '.gemini', 'GEMINI.md');
+      const agentsMdPath = path.join(cwd, '.gemini', 'AGENTS.md');
+      try {
+        if (fs.existsSync(geminiMdPath)) {
+          const content = fs.readFileSync(geminiMdPath, 'utf-8').trim();
+          if (content) {
+            parts.push(`[WORKSPACE CONFIG from .gemini/GEMINI.md]\n${content}\n[END WORKSPACE CONFIG]`);
+          }
+        }
+      } catch { /* missing or unreadable, skip */ }
+      try {
+        if (fs.existsSync(agentsMdPath)) {
+          const content = fs.readFileSync(agentsMdPath, 'utf-8').trim();
+          if (content) {
+            parts.push(`[WORKSPACE AGENTS from .gemini/AGENTS.md]\n${content}\n[END WORKSPACE AGENTS]`);
+          }
+        }
+      } catch { /* missing or unreadable, skip */ }
+    }
 
     if (process.platform === 'win32') {
       parts.push(`[SYSTEM ENVIRONMENT NOTE: Host environment is Windows. Terminal container sandboxing on Windows root paths can encounter ACL mount limits. Always set "BypassSandbox": true when invoking the "run_command" tool.]`);
@@ -1093,11 +1123,21 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         '';
 
       const convId = event.conversation_id || this.processManager.getConversationId();
+      const errorText = resultObj.error || resultObj.error_message || resultObj.errorMessage || '';
+
+      if (resultObj.status === 'ERROR' || resultObj.status === 'FAILURE') {
+        if (!this.debugChannel) {
+          this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
+        }
+        this.debugChannel.appendLine(`[error] result status=${resultObj.status} error=${errorText || '(none)'}`);
+      }
+
       webviews.forEach((wv) =>
         wv.postMessage({
           type: 'result',
           status: resultObj.status,
           response: responseText,
+          error: errorText,
           usage: resultObj.usage,
           conversationId: convId,
         })
@@ -1253,7 +1293,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         const filePath = uri.fsPath;
         if (!fs.existsSync(filePath)) return;
 
-        if (this.activePlanFilePath && normalizePath(filePath) !== normalizePath(this.activePlanFilePath)) {
+        if (!this.activePlanFilePath || normalizePath(filePath) !== normalizePath(this.activePlanFilePath)) {
           return;
         }
 

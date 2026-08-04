@@ -10,6 +10,7 @@ export class AgyProcessManager extends EventEmitter {
   private rl: readline.Interface | null = null;
   private currentConversationId: string | null = null;
   private turnActive = false;
+  private spawnTimestamp = 0;
 
   public getConversationId(): string | null {
     return this.currentConversationId;
@@ -29,8 +30,11 @@ export class AgyProcessManager extends EventEmitter {
       extraWorkspaceDirs?: string[];
     } = {}
   ): void {
-    if (this.turnActive) {
+    if (this.turnActive && this.process) {
       return;
+    }
+    if (this.turnActive && !this.process) {
+      this.turnActive = false;
     }
 
     this.killProcess();
@@ -71,6 +75,8 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--dangerously-skip-permissions');
     }
 
+    this.spawnTimestamp = Date.now();
+
     const proc = spawn(cliPath, args, {
       cwd,
       env: { ...process.env },
@@ -101,6 +107,15 @@ export class AgyProcessManager extends EventEmitter {
         }
         if (parsed.step_update?.conversation_id) {
           this.currentConversationId = parsed.step_update.conversation_id;
+        }
+
+        if (eventType === 'init' && this.spawnTimestamp) {
+          const initMs = Date.now() - this.spawnTimestamp;
+          this.emit('timing', { phase: 'spawn-to-init', ms: initMs });
+        }
+        if (eventType === 'result' && this.spawnTimestamp) {
+          const totalMs = Date.now() - this.spawnTimestamp;
+          this.emit('timing', { phase: 'total', ms: totalMs });
         }
 
         this.emit('event', normalizedEvent);

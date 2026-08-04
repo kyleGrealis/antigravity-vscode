@@ -1305,13 +1305,12 @@ window.addEventListener('message', (event) => {
         if (!currentStreamingMessage.text && data.response && data.response.trim().length > 0) {
           currentStreamingMessage.text = data.response;
         }
-        if (
-          !currentStreamingMessage.text &&
-          (!currentStreamingMessage.thinking || !currentStreamingMessage.thinking.trim()) &&
-          (!currentStreamingMessage.toolCalls || currentStreamingMessage.toolCalls.length === 0)
-        ) {
-          if (data.status === 'ERROR' || data.status === 'FAILURE') {
-            currentStreamingMessage.text = '[Response failed]';
+        if (data.status === 'ERROR' || data.status === 'FAILURE') {
+          if (!currentStreamingMessage.text &&
+              (!currentStreamingMessage.thinking || !currentStreamingMessage.thinking.trim()) &&
+              (!currentStreamingMessage.toolCalls || currentStreamingMessage.toolCalls.length === 0)) {
+            const errDetail = data.error ? `: ${data.error}` : '';
+            currentStreamingMessage.text = `[Response failed${errDetail}] - try sending again`;
           }
         }
         if (data.usage) {

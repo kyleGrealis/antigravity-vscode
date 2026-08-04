@@ -73,6 +73,9 @@ export function activate(context: vscode.ExtensionContext) {
       webviewProvider.sendActiveFileContext();
     })
   );
+
+  // Ensure agy processes are killed when the extension deactivates
+  context.subscriptions.push({ dispose: () => processManager.killProcess() });
 }
 
 export function deactivate() {}
