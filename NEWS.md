@@ -1,5 +1,18 @@
 # Release Notes
 
+## antigravity-vscode 0.2.0
+
+- **Workspace config injection**: Prepend `.gemini/GEMINI.md` and `.gemini/AGENTS.md` to first-turn prompts (`--print` mode skips workspace configs natively, so the extension injects them).
+- **Session hardening**: Kill orphan agy processes on extension deactivate and before session switches. Reset zombie `turnActive` state when process is gone but flag is stuck.
+- **Conversation ID validation**: Verify transcript `.jsonl` exists before restoring a conversation on restart, preventing attempts to resume nonexistent sessions.
+- **Plan trigger fix**: Plan file watcher now requires a known active plan file path instead of firing on any `*plan*.md` match.
+- **Performance telemetry**: Spawn-to-init and total turn timing logged to the Antigravity Debug output channel.
+- **Error detail forwarding**: Show agy error details on failed responses instead of generic "[Response failed]".
+
+### Known upstream bug (Google)
+
+**Binary image files (PNG, JPG, etc.) crash the agy CLI on Windows** as of the August 3 2026 auto-update (agy v1.1.10). Reading any binary image file terminates the session and permanently poisons the conversation. This is a Google-side regression, not an extension bug. Linux is unaffected. Use `/new` to recover. See [community report](https://discuss.ai.google.dev/t/antigravity-cli-stopped-reading-png-files/177160).
+
 ## antigravity-vscode 0.1.6
 
 - **Plan Mode overhaul**: Full lifecycle plan cards with approve, modify, cancel, and real-time checkbox sync during execution. Contextual prompt box states throughout the plan workflow.
