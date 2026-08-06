@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as cp from 'child_process';
 import { AgyProcessManager } from './processManager';
 import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
@@ -85,6 +86,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     private readonly diffController: DiffController,
     private readonly context?: vscode.ExtensionContext
   ) {
+    this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
+    this.debugChannel.clear();
+
     const activeWorkspacePath = this.resolveWorkingDirectory();
     let restoredId = this.context?.workspaceState.get<string>('activeConversationId');
     if (restoredId) {
@@ -302,8 +306,16 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         case 'killTask': {
           const taskId = message.taskId;
           if (taskId) {
-            const cancelPrompt = `[SYSTEM] Cancel the running task with ID "${taskId}". Use the manage_task tool with Action "cancel" and TaskId "${taskId}".`;
-            this.onUserPrompt(cancelPrompt, []);
+            if (this.processManager.isBusy()) {
+              this.processManager.cancelCurrentTask();
+            }
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId);
+            const cancelPrompt = isUuid
+              ? `Kill the running subagent "${taskId}" immediately. Use the manage_subagents tool with Action "kill" and ConversationIds ["${taskId}"].`
+              : `Cancel the running task "${taskId}" immediately. Use the manage_task tool with Action "cancel" and TaskId "${taskId}".`;
+            setTimeout(() => {
+              this.dispatchPrompt(cancelPrompt, []);
+            }, 250);
           }
           break;
         }
@@ -469,6 +481,52 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
                 wv.postMessage({ type: 'updateTitle', title: message.title });
               }
             });
+          }
+          break;
+        }
+
+        case 'deleteSession': {
+          if (message.conversationId) {
+            const convId = message.conversationId;
+            const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+            const convDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
+            const brainPath = path.join(brainDir, convId);
+            const dbPath = path.join(convDir, `${convId}.db`);
+
+            const trashCmd = process.platform === 'win32' ? 'Remove-ItemSafely' : 'trash-put';
+            if (fs.existsSync(brainPath)) {
+              cp.exec(`${trashCmd} "${brainPath}"`, (err) => {
+                if (err) this.debugChannel?.appendLine(`[deleteSession] Failed to trash brain dir: ${err.message}`);
+              });
+            }
+            if (fs.existsSync(dbPath)) {
+              cp.exec(`${trashCmd} "${dbPath}"`, (err) => {
+                if (err) this.debugChannel?.appendLine(`[deleteSession] Failed to trash db: ${err.message}`);
+              });
+            }
+            for (const ext of ['-shm', '-wal']) {
+              const walPath = path.join(convDir, `${convId}.db${ext}`);
+              if (fs.existsSync(walPath)) {
+                cp.exec(`${trashCmd} "${walPath}"`);
+              }
+            }
+
+            if (this.processManager.getConversationId() === convId) {
+              this.processManager.setConversationId(null);
+            }
+
+            setTimeout(() => {
+              const sessions = this.getSessionsList();
+              const currentId = this.processManager.getConversationId();
+              const activeWorkspacePath = this.resolveWorkingDirectory();
+              const workspaceInfo = {
+                name: path.basename(activeWorkspacePath),
+                path: activeWorkspacePath,
+              };
+              this.getWebviews().forEach((wv) => {
+                wv.postMessage({ type: 'sessionsList', sessions, currentId, workspaceInfo });
+              });
+            }, 500);
           }
           break;
         }
@@ -888,6 +946,29 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           wv.postMessage({
             type: 'thinkingDelta',
             delta: thinkingDelta,
+          })
+        );
+      }
+
+      if (stepType === 'subagent' && step.subagent_info) {
+        const subs: any[] = step.subagent_info.subagents || [];
+        const saArgs: Record<string, string> = {};
+        let saResult = '';
+        if (subs.length > 0) {
+          saArgs.Name = subs[0].role || '';
+          saArgs.Prompt = subs[0].initial_prompt || '';
+          saResult = subs.map((s: any) => s.conversation_id || '').join(', ');
+        }
+        const saStatus = step.state === 'DONE' ? 'done' : step.state === 'ERROR' ? 'error' : 'running';
+        const saId = step.step_index !== undefined ? `step_${step.step_index}` : `subagent_${Date.now()}`;
+        webviews.forEach((wv) =>
+          wv.postMessage({
+            type: 'toolCall',
+            id: saId,
+            name: 'invoke_subagent',
+            args: saArgs,
+            status: saStatus,
+            result: saResult,
           })
         );
       }

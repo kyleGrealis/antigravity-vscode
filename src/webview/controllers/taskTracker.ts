@@ -25,7 +25,27 @@ export function processToolCallForTasks(name: string, args: any, result: string 
     detectTaskLaunch(result);
   }
 
-  if (normName === 'managetask' || normName === 'manage_task') {
+  if (normName === 'invokesubagent' || normName === 'invoke_subagent' ||
+      normName === 'definesubagent' || normName === 'define_subagent') {
+    detectTaskLaunch(result);
+    const parsedArgs = typeof args === 'object' ? args : tryParse(args);
+    const taskName = parsedArgs?.Name || parsedArgs?.name || parsedArgs?.TaskName || parsedArgs?.task_name || '';
+    if (result && status === 'done') {
+      const uuid = extractUuidTaskId(result) || extractUuidTaskId(JSON.stringify(parsedArgs));
+      if (uuid && !activeTasks.has(uuid)) {
+        activeTasks.set(uuid, {
+          taskId: uuid,
+          description: taskName || uuid.substring(0, 8),
+          status: 'running',
+          startTime: Date.now(),
+        });
+        renderTracker();
+      }
+    }
+  }
+
+  if (normName === 'managetask' || normName === 'manage_task' ||
+      normName === 'managesubagents' || normName === 'manage_subagents') {
     const parsedArgs = typeof args === 'object' ? args : tryParse(args);
     const action = (parsedArgs?.Action || parsedArgs?.action || '').toLowerCase();
 
@@ -35,21 +55,30 @@ export function processToolCallForTasks(name: string, args: any, result: string 
 
     if ((action === 'kill' || action === 'cancel') && status === 'done') {
       const taskId = parsedArgs?.TaskId || parsedArgs?.taskId || parsedArgs?.task_id;
-      if (taskId) {
-        const shortId = extractShortTaskId(taskId);
-        if (shortId && activeTasks.has(shortId)) {
-          activeTasks.get(shortId)!.status = 'cancelled';
-          renderTracker();
+      const convIds = parsedArgs?.ConversationIds || parsedArgs?.conversationIds || parsedArgs?.conversation_ids || [];
+      const allIds: string[] = [];
+      if (taskId) allIds.push(taskId);
+      if (Array.isArray(convIds)) allIds.push(...convIds);
+
+      let changed = false;
+      for (const id of allIds) {
+        const resolved = extractShortTaskId(id) || extractUuidTaskId(id) || id;
+        if (activeTasks.has(resolved)) {
+          activeTasks.get(resolved)!.status = 'cancelled';
+          changed = true;
         }
       }
+      if (changed) renderTracker();
     }
   }
 }
 
 function detectTaskLaunch(result: string | undefined) {
   if (!result) return;
-  const matches = result.matchAll(/\b(task-\d+)\b.*?(?:launched|started|created|running)/gi);
-  for (const m of matches) {
+  let found = false;
+
+  const shortMatches = result.matchAll(/\b(task-\d+)\b/gi);
+  for (const m of shortMatches) {
     const taskId = m[1];
     if (!activeTasks.has(taskId)) {
       activeTasks.set(taskId, {
@@ -58,21 +87,25 @@ function detectTaskLaunch(result: string | undefined) {
         status: 'running',
         startTime: Date.now(),
       });
+      found = true;
     }
   }
-  const altMatches = result.matchAll(/(?:launched|started|created|running).*?\b(task-\d+)\b/gi);
-  for (const m of altMatches) {
-    const taskId = m[1];
-    if (!activeTasks.has(taskId)) {
-      activeTasks.set(taskId, {
-        taskId,
-        description: taskId,
+
+  const uuidContextPattern = /(?:task|subagent|conversation|agent)[\s_:-]*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi;
+  for (const m of result.matchAll(uuidContextPattern)) {
+    const uuid = m[1];
+    if (!activeTasks.has(uuid)) {
+      activeTasks.set(uuid, {
+        taskId: uuid,
+        description: uuid.substring(0, 8),
         status: 'running',
         startTime: Date.now(),
       });
+      found = true;
     }
   }
-  renderTracker();
+
+  if (found) renderTracker();
 }
 
 function detectTaskStatus(result: string, args: any) {
@@ -107,6 +140,12 @@ function detectTaskStatus(result: string, args: any) {
 function extractShortTaskId(fullId: string): string | null {
   if (!fullId) return null;
   const match = fullId.match(/(task-\d+)/);
+  return match ? match[1] : null;
+}
+
+function extractUuidTaskId(text: string): string | null {
+  if (!text) return null;
+  const match = text.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
   return match ? match[1] : null;
 }
 
@@ -197,6 +236,16 @@ function renderTracker() {
       });
     }, 1000);
   }
+}
+
+export function getTaskStatus(taskId: string): TrackedTask | null {
+  return activeTasks.get(taskId) || null;
+}
+
+export function getRunningTaskIds(): string[] {
+  return [...activeTasks.values()]
+    .filter(t => t.status === 'running')
+    .map(t => t.taskId);
 }
 
 export function clearTaskTracker() {

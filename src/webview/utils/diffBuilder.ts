@@ -1,6 +1,10 @@
 import { cleanValue, esc } from './escape';
 import { getArgVal, parseJsonArgs, extractJsonStringField } from './formatters';
 
+function normalizeNewlines(s: string): string {
+  return s.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n');
+}
+
 export function extractStringResult(rawResult: any): string {
   if (!rawResult) return '';
   if (typeof rawResult === 'string') return rawResult;
@@ -119,8 +123,8 @@ export function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?
       const r = getArgVal(chunk, 'ReplacementContent', 'replacementContent', 'replacement_content', 'replacement', 'newContent', 'new');
       const cStart = getArgVal(chunk, 'StartLine', 'startLine', 'start_line');
       const cStartNum = cStart ? parseInt(String(cStart), 10) : null;
-      const tLines = (t !== undefined && t !== null && String(t).length > 0) ? String(t).split('\n') : [];
-      const rLines = (r !== undefined && r !== null && String(r).length > 0) ? String(r).split('\n') : [];
+      const tLines = (t !== undefined && t !== null && String(t).length > 0) ? normalizeNewlines(String(t)).split('\n') : [];
+      const rLines = (r !== undefined && r !== null && String(r).length > 0) ? normalizeNewlines(String(r)).split('\n') : [];
       
       if (cStartNum !== null) {
         diffLines.push(`@@ -${cStartNum},${tLines.length} +${cStartNum},${rLines.length} @@ chunk ${idx + 1}`);
@@ -133,8 +137,8 @@ export function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?
   } else if (target !== undefined || replacement !== undefined) {
     diffLines.push(`--- a/${fileName}`);
     diffLines.push(`+++ b/${fileName}`);
-    const tLines = (target !== undefined && target !== null && String(target).length > 0) ? String(target).split('\n') : [];
-    const rLines = (replacement !== undefined && replacement !== null && String(replacement).length > 0) ? String(replacement).split('\n') : [];
+    const tLines = (target !== undefined && target !== null && String(target).length > 0) ? normalizeNewlines(String(target)).split('\n') : [];
+    const rLines = (replacement !== undefined && replacement !== null && String(replacement).length > 0) ? normalizeNewlines(String(replacement)).split('\n') : [];
     
     if (startNum !== null) {
       diffLines.push(`@@ -${startNum},${tLines.length} +${startNum},${rLines.length} @@${instr ? ' ' + instr : ''}`);
@@ -148,7 +152,7 @@ export function buildDiffFromToolArgs(toolName: string, rawArgs: any, rawResult?
   } else if (code !== undefined && code !== null) {
     diffLines.push(`--- /dev/null`);
     diffLines.push(`+++ b/${fileName}`);
-    const cLines = String(code).split('\n');
+    const cLines = normalizeNewlines(String(code)).split('\n');
     diffLines.push(`@@ -0,0 +1,${cLines.length} @@${instr ? ' ' + instr : ' new file'}`);
     cLines.forEach((l: string) => diffLines.push(`+${l}`));
   }
@@ -197,8 +201,8 @@ export function renderDiffOrTextHtml(text: string): string {
     }
   }
 
-  const lines = cleanText.split('\n');
-  return lines.map(line => {
+  const lines = normalizeNewlines(cleanText).split('\n');
+  const mapped = lines.map(line => {
     const escaped = esc(line);
     if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff --git') || line.startsWith('index ')) {
       return `<span class="diff-header">${escaped}</span>`;
@@ -212,6 +216,7 @@ export function renderDiffOrTextHtml(text: string): string {
     if (line.startsWith('-') && !line.startsWith('---')) {
       return `<span class="diff-del">${escaped}</span>`;
     }
-    return escaped;
-  }).join('\n');
+    return `<span class="diff-ctx">${escaped}</span>`;
+  });
+  return mapped.join('');
 }

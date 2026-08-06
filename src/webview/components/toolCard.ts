@@ -2,11 +2,13 @@ import { ToolCall } from '../types';
 import { esc } from '../utils/escape';
 import { toPascalCaseName, formatToolSummary, formatToolArgsForDisplay, parseJsonArgs, getArgVal } from '../utils/formatters';
 import { buildDiffFromToolArgs, extractTargetFile, extractStringResult, renderDiffOrTextHtml } from '../utils/diffBuilder';
+import { getTaskStatus } from '../controllers/taskTracker';
 
 export function renderToolCallCard(
   tc: ToolCall,
   postMessage: (msg: any) => void,
-  renderAll: (autoScrollForce?: boolean, isUserInteraction?: boolean) => void
+  renderAll: (autoScrollForce?: boolean, isUserInteraction?: boolean) => void,
+  webMode = false
 ): HTMLElement {
   const accordion = document.createElement('div');
   accordion.className = `tool-accordion${tc.expanded ? ' open' : ''}`;
@@ -33,8 +35,10 @@ export function renderToolCallCard(
   if (argsText) {
     const summaryEl = document.createElement('span');
     summaryEl.className = 'tool-summary';
-    if (summary.isFile) {
+    if (summary.isFile && !webMode) {
       summaryEl.innerHTML = `(<span class="clickable-file" data-path="${esc(argsText)}" title="Click to open in editor">${esc(argsText)}</span>)`;
+    } else if (summary.isFile) {
+      summaryEl.textContent = `(${argsText})`;
     } else {
       summaryEl.textContent = `(${argsText})`;
     }
@@ -82,6 +86,67 @@ export function renderToolCallCard(
     header.appendChild(taskMeta);
   }
 
+  const subagentTools = ['invoke_subagent', 'invokesubagent', 'define_subagent', 'definesubagent'];
+  const isSubagentTool = subagentTools.includes((tc.name || '').toLowerCase().replace(/[^a-z_]/g, ''));
+  if (isSubagentTool && statusClass === 'done') {
+    const resultStr = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result || '');
+    const uuidMatch = resultStr.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
+    if (uuidMatch) {
+      const subagentId = uuidMatch[1];
+      const tracked = getTaskStatus(subagentId);
+      if (tracked && tracked.status === 'running') {
+        statusIcon.className = 'tool-status-icon running';
+        statusIcon.innerHTML = '&#9696;';
+
+        const subMeta = document.createElement('span');
+        subMeta.className = 'task-running-meta';
+
+        const badge = document.createElement('span');
+        badge.className = 'subagent-badge';
+        badge.textContent = 'subagent running';
+
+        const elapsed = document.createElement('span');
+        elapsed.className = 'task-elapsed';
+        const start = tracked.startTime;
+        const fmt = (ms: number) => {
+          const s = Math.floor(ms / 1000);
+          return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+        };
+        elapsed.textContent = fmt(Date.now() - start);
+        const timer = setInterval(() => {
+          const t = getTaskStatus(subagentId);
+          if (!t || t.status !== 'running') {
+            clearInterval(timer);
+            subMeta.remove();
+            statusIcon.className = 'tool-status-icon done';
+            statusIcon.innerHTML = '&#9679;';
+            return;
+          }
+          elapsed.textContent = fmt(Date.now() - start);
+        }, 1000);
+
+        const killBtn = document.createElement('button');
+        killBtn.className = 'task-kill-btn';
+        killBtn.textContent = 'Kill';
+        killBtn.title = 'Cancel this subagent';
+        killBtn.onclick = (e) => {
+          e.stopPropagation();
+          postMessage({ command: 'killTask', taskId: subagentId });
+        };
+
+        subMeta.appendChild(badge);
+        subMeta.appendChild(elapsed);
+        subMeta.appendChild(killBtn);
+        header.appendChild(subMeta);
+      } else if (tracked && tracked.status !== 'running') {
+        const doneBadge = document.createElement('span');
+        doneBadge.className = `subagent-badge subagent-${tracked.status}`;
+        doneBadge.textContent = `subagent ${tracked.status}`;
+        header.appendChild(doneBadge);
+      }
+    }
+  }
+
   header.appendChild(hintEl);
 
   const body = document.createElement('div');
@@ -107,7 +172,7 @@ export function renderToolCallCard(
     title.textContent = 'Changes (Diff)';
     diffHeader.appendChild(title);
 
-    if (targetFile) {
+    if (targetFile && !webMode) {
       const openDiffBtn = document.createElement('button');
       openDiffBtn.className = 'open-diff-btn';
       openDiffBtn.textContent = 'Compare in Editor ↗';
@@ -162,10 +227,12 @@ export function renderToolCallCard(
     img.src = targetFile;
     img.alt = targetFile.split(/[/\\]/).pop() || 'Image';
     img.className = 'tool-image-inline';
-    img.onclick = (e) => {
-      e.stopPropagation();
-      postMessage({ command: 'openFile', filePath: targetFile });
-    };
+    if (!webMode) {
+      img.onclick = (e) => {
+        e.stopPropagation();
+        postMessage({ command: 'openFile', filePath: targetFile });
+      };
+    }
     imgBlock.appendChild(img);
     bodyInner.appendChild(imgBlock);
   }

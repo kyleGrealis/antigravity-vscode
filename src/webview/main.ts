@@ -11,7 +11,7 @@ import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering,
 import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
 import { initSessionHistory, updateWorkspaceHeaderBadge, renderHistoryDropdown } from './controllers/sessionHistory';
 import { initPlanCard, renderPlanCard, renderClarificationCard } from './controllers/planCard';
-import { initTaskTracker, processToolCallForTasks, clearTaskTracker } from './controllers/taskTracker';
+import { initTaskTracker, processToolCallForTasks, clearTaskTracker, getRunningTaskIds } from './controllers/taskTracker';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -26,6 +26,8 @@ let currentStreamingMessage: Message | null = null;
 let activeConversationId: string | null = null;
 
 let attachedImages: string[] = [];
+let botDisplayName = 'antigravity';
+let isWebMode = false;
 
 const log = document.getElementById('chat-messages') as HTMLElement;
 
@@ -430,21 +432,23 @@ log?.addEventListener('click', (e) => {
     if (href) {
       if (!href.startsWith('http://') && !href.startsWith('https://')) {
         e.preventDefault();
-        vscode.postMessage({ command: 'openFile', filePath: href });
+        if (!isWebMode) {
+          vscode.postMessage({ command: 'openFile', filePath: href });
+        }
         return;
       }
     }
   }
 
   const clickableFile = target.closest('.clickable-file');
-  if (clickableFile) {
+  if (clickableFile && !isWebMode) {
     const pathAttr = clickableFile.getAttribute('data-path');
     if (pathAttr) {
       vscode.postMessage({ command: 'openFile', filePath: pathAttr });
     }
   }
 
-  if (target.tagName === 'IMG') {
+  if (target.tagName === 'IMG' && !isWebMode) {
     const src = (target as HTMLImageElement).src;
     if (src && !src.startsWith('data:')) {
       vscode.postMessage({ command: 'openFile', filePath: src });
@@ -647,7 +651,7 @@ function setBusy(busy: boolean) {
       startThinkingRotation();
     } else {
       stopThinkingRotation();
-      statusEl.textContent = 'enter to send, shift+enter for newline';
+      statusEl.textContent = isWebMode ? '' : 'enter to send, shift+enter for newline';
     }
     statusEl.className = busy ? 'input-hint status-indicator active' : 'input-hint status-indicator';
   }
@@ -891,7 +895,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
 
     const role = document.createElement('div');
     role.className = `msg-role ${msg.role}`;
-    role.textContent = msg.role === 'user' ? 'you' : 'antigravity';
+    role.textContent = msg.role === 'user' ? 'you' : botDisplayName;
     el.appendChild(role);
 
     if (msg.role === 'assistant' && msg.thinking && msg.thinking.trim()) {
@@ -906,7 +910,8 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
         const accordion = renderToolCallCard(
           tc,
           (m) => vscode.postMessage(m),
-          (autoScroll, isUser) => renderAll(autoScroll, isUser)
+          (autoScroll, isUser) => renderAll(autoScroll, isUser),
+          isWebMode
         );
         toolSection.appendChild(accordion);
       }
@@ -1174,6 +1179,19 @@ window.addEventListener('message', (event) => {
       setExecutionMode('auto');
     } else if (data.dangerouslySkipPermissions === false && activeMode === 'auto') {
       setExecutionMode('default');
+    }
+
+    if (data.isWebMode) {
+      isWebMode = true;
+    }
+
+    if (data.botName) {
+      botDisplayName = data.botName;
+      const emptyTitle = document.querySelector('.empty-state-title');
+      if (emptyTitle) emptyTitle.textContent = data.botName;
+      document.querySelectorAll('.msg-role.assistant').forEach(el => {
+        el.textContent = data.botName;
+      });
     }
 
     const sandboxTextEl = document.getElementById('sandbox-text');

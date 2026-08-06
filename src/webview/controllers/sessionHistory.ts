@@ -78,6 +78,7 @@ function renderFilteredSessions(sessions: SessionEntry[], currentId?: string | n
             </div>
           </div>
           <button class="history-item-edit-btn icon-btn" title="Rename session" data-id="${s.id}">&#9999;&#65039;</button>
+          <button class="history-item-delete-btn icon-btn" title="Delete session" data-id="${s.id}">&times;</button>
         </div>
       `;
     }
@@ -100,13 +101,27 @@ function renderFilteredSessions(sessions: SessionEntry[], currentId?: string | n
   const items = historyDropdown.querySelectorAll('.history-item');
   items.forEach((item) => {
     item.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.history-item-edit-btn')) {
+      if ((e.target as HTMLElement).closest('.history-item-edit-btn') || (e.target as HTMLElement).closest('.history-item-delete-btn')) {
         return;
       }
       const convId = item.getAttribute('data-id');
       if (convId) {
         historyDropdown.style.display = 'none';
         postMessage({ command: 'selectSession', conversationId: convId });
+      }
+    });
+  });
+
+  const deleteBtns = historyDropdown.querySelectorAll('.history-item-delete-btn');
+  deleteBtns.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const convId = btn.getAttribute('data-id');
+      if (!convId) return;
+      const targetSession = cachedSessionsList.find(s => s.id === convId);
+      const title = targetSession ? targetSession.title : convId.substring(0, 8);
+      if (confirm(`Delete session "${title}"?`)) {
+        postMessage({ command: 'deleteSession', conversationId: convId });
       }
     });
   });
