@@ -6,6 +6,7 @@ import { isDiffText, renderDiffOrTextHtml } from './utils/diffBuilder';
 import { renderToolCallCard } from './components/toolCard';
 import { initAtMenu, setAtFilteredFiles, getAtMatch, isAtMenuVisible, updateAtMenu, hideAtMenu, acceptAtItem, navigateAtMenu } from './controllers/atMenuController';
 import { initMermaidController, renderMermaidDiagrams } from './controllers/mermaidModal';
+import { renderLaTeX } from './controllers/latexRenderer';
 import { initSlashMenu, setSlashCommands, isSlashMenuVisible, updateSlashMenu, hideSlashMenu, acceptSlashItem, navigateSlashMenu, getSlashCommands } from './controllers/slashMenuController';
 import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering, setIsRendering, setDirtyWhileScrolledUp, resetScrollState, showScrollToBottomPill, hideScrollToBottomPill, scrollToBottom, getScrollMetrics } from './controllers/scrollManager';
 import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
@@ -26,6 +27,7 @@ let currentStreamingMessage: Message | null = null;
 let activeConversationId: string | null = null;
 
 let attachedImages: string[] = [];
+let attachedTextFiles: Array<{ name: string; content: string }> = [];
 let botDisplayName = 'antigravity';
 let isWebMode = false;
 
@@ -468,7 +470,7 @@ function executeSlashCommand(name: string, arg?: string) {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }
-  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous') {
+  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous' || name === 'effort') {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }
@@ -498,7 +500,7 @@ function executeSlashCommand(name: string, arg?: string) {
 
 function sendPrompt() {
   const text = input.value.trim();
-  if (!text && attachedImages.length === 0) return;
+  if (!text && attachedImages.length === 0 && attachedTextFiles.length === 0) return;
 
   if (text) {
     if (promptHistory.length === 0 || promptHistory[promptHistory.length - 1] !== text) {
@@ -557,13 +559,21 @@ function sendPrompt() {
   }
 
   const imagesToSend = [...attachedImages];
+  const textFilesToSend = [...attachedTextFiles];
   attachedImages = [];
-  renderImageBar();
+  attachedTextFiles = [];
+  renderAttachmentBar();
 
   let displayText = text;
+  const attachLabels: string[] = [];
   if (imagesToSend.length > 0) {
-    const imgLabels = imagesToSend.map(p => `[Image: ${p.split(/[\/\\]/).pop()}]`).join(' ');
-    displayText = displayText ? `${imgLabels}\n${displayText}` : imgLabels;
+    attachLabels.push(...imagesToSend.map(p => `[Image: ${p.split(/[\/\\]/).pop()}]`));
+  }
+  if (textFilesToSend.length > 0) {
+    attachLabels.push(...textFilesToSend.map(f => `[File: ${f.name}]`));
+  }
+  if (attachLabels.length > 0) {
+    displayText = displayText ? `${attachLabels.join(' ')}\n${displayText}` : attachLabels.join(' ');
   }
 
   const isSteering = isBusyState;
@@ -600,6 +610,7 @@ function sendPrompt() {
     command: 'sendPrompt',
     text,
     images: imagesToSend.length > 0 ? imagesToSend : undefined,
+    textFiles: textFilesToSend.length > 0 ? textFilesToSend : undefined,
     dangerouslySkipPermissions: currentMode === 'auto' || undefined,
   });
 }
@@ -608,13 +619,13 @@ function updateContextHintVisibility() {
   const contextHint = document.getElementById('context-hint');
   if (!contextHint) return;
   const hasActiveFile = !!(contextBar && contextBar.style.display !== 'none' && fileChip && fileChip.textContent);
-  const hasImages = attachedImages.length > 0;
-  contextHint.style.display = (!hasActiveFile && !hasImages) ? 'inline' : 'none';
+  const hasAttachments = attachedImages.length > 0 || attachedTextFiles.length > 0;
+  contextHint.style.display = (!hasActiveFile && !hasAttachments) ? 'inline' : 'none';
 }
 
-function renderImageBar() {
+function renderAttachmentBar() {
   if (!imageBar) return;
-  if (attachedImages.length === 0) {
+  if (attachedImages.length === 0 && attachedTextFiles.length === 0) {
     imageBar.style.display = 'none';
     imageBar.innerHTML = '';
     updateContextHintVisibility();
@@ -629,7 +640,17 @@ function renderImageBar() {
     chip.innerHTML = `<span class="img-chip-name" title="${esc(imgUri)}">&#128444; ${esc(filename)}</span><button class="img-chip-remove" title="Remove">&times;</button>`;
     chip.querySelector('.img-chip-remove')?.addEventListener('click', () => {
       attachedImages.splice(idx, 1);
-      renderImageBar();
+      renderAttachmentBar();
+    });
+    imageBar.appendChild(chip);
+  });
+  attachedTextFiles.forEach((file, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'img-chip';
+    chip.innerHTML = `<span class="img-chip-name" title="${esc(file.name)}">&#128196; ${esc(file.name)}</span><button class="img-chip-remove" title="Remove">&times;</button>`;
+    chip.querySelector('.img-chip-remove')?.addEventListener('click', () => {
+      attachedTextFiles.splice(idx, 1);
+      renderAttachmentBar();
     });
     imageBar.appendChild(chip);
   });
@@ -803,6 +824,7 @@ function updateStreamingDOM() {
     bodyEl.innerHTML = marked.parse(currentStreamingMessage.text) as string;
     rewriteImageSources(bodyEl);
     applyDiffHighlighting(bodyEl);
+    renderLaTeX(bodyEl);
     if (currentStreamingMessage.isStreaming) {
       bodyEl.classList.add('streaming-cursor');
     }
@@ -966,6 +988,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
   attachInlineCodeCopyHandlers(log);
   rewriteImageSources(log);
   renderMermaidDiagrams(log);
+  renderLaTeX(log);
 
   requestAnimationFrame(() => {
     if (autoScrollForce || wasAtBottom) {
@@ -1465,7 +1488,14 @@ window.addEventListener('message', (event) => {
     case 'imagesAttached':
       if (data.paths && Array.isArray(data.paths)) {
         attachedImages.push(...data.paths);
-        renderImageBar();
+        renderAttachmentBar();
+      }
+      break;
+
+    case 'textFilesAttached':
+      if (data.files && Array.isArray(data.files)) {
+        attachedTextFiles.push(...data.files);
+        renderAttachmentBar();
       }
       break;
 

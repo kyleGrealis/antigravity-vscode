@@ -1,5 +1,14 @@
 # Release Notes
 
+## antigravity-vscode 0.2.2
+
+- **LaTeX math rendering**: Inline (`$...$`) and display (`$$...$$`) math notation now renders as formatted equations via KaTeX. Includes a `prepareMathInElement` sanitizer that fixes markdown/HTML conflicts (emphasis tags inside math delimiters, bare `\begin` environments).
+- **Text file attachments**: Paperclip button now accepts text-based files (`.md`, `.txt`, `.csv`, `.json`, `.py`, `.R`, `.ts`, etc.) in addition to images. Text file content is inlined directly into the prompt with `[Attached file: name]` framing.
+- **README overhaul**: Added 3-step prerequisites flow (CLI install, `agy auth login`, VSIX install). Removed webapp references. Cleaned up roadmap.
+- **`/effort` slash command**: Set reasoning effort (low/medium/high) mid-session with autocomplete sub-menu. Passes `--effort` flag to agy CLI on each spawn.
+- **Sandbox flag wired**: `--sandbox` toggle now actually passes the flag to agy (was UI-only before).
+- **`/help` updated**: Added `/effort` to the help table.
+
 ## antigravity-vscode 0.2.1
 
 - **Subagent tracking**: Live badge, elapsed timer, and inline kill button on `invoke_subagent` tool cards.

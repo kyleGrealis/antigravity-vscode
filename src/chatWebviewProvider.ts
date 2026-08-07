@@ -76,6 +76,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private currentPanel?: vscode.WebviewPanel;
   private sessionSkipPermissions: boolean = false;
   private sessionAllowedCommands: Set<string> = new Set();
+  private effortLevel: 'low' | 'medium' | 'high' = 'medium';
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
   private isSteeringPivot = false;
@@ -226,6 +227,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'effort', description: 'set reasoning effort', hasArg: true, argHint: '<low|medium|high>', options: [
+        { value: 'low', label: 'quick lookups, simple tasks' },
+        { value: 'medium', label: 'balanced (default)' },
+        { value: 'high', label: 'deep analysis, complex reasoning' },
+      ]},
       { name: 'sandbox', description: 'toggle container sandboxing (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'dangerous', description: 'toggle permission auto-approvals (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'settings', description: 'open extension settings' },
@@ -286,11 +292,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       switch (message.command) {
         case 'userPrompt':
         case 'sendPrompt':
-          this.onUserPrompt(message.promptText || message.text, message.images, message.dangerouslySkipPermissions);
+          this.onUserPrompt(message.promptText || message.text, message.images, message.dangerouslySkipPermissions, message.textFiles);
           break;
 
         case 'selectImage':
-          this.handleSelectImage(webview);
+          this.handleSelectFile(webview);
           break;
 
         case 'savePastedImage':
@@ -587,15 +593,53 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async handleSelectImage(webview: vscode.Webview) {
+  private static readonly TEXT_EXTENSIONS = new Set([
+    '.md', '.txt', '.csv', '.json', '.r', '.rmd', '.qmd', '.py', '.js', '.ts',
+    '.jsx', '.tsx', '.html', '.css', '.scss', '.yaml', '.yml', '.toml', '.xml',
+    '.sql', '.sh', '.bash', '.zsh', '.nix', '.lua', '.rb', '.go', '.rs', '.c',
+    '.cpp', '.h', '.hpp', '.java', '.kt', '.swift', '.env', '.ini', '.cfg', '.conf',
+    '.log', '.tex', '.bib', '.dockerfile',
+  ]);
+
+  private async handleSelectFile(webview: vscode.Webview) {
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
-      openLabel: 'Attach Image',
-      filters: { 'Images': ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] },
+      openLabel: 'Attach File',
+      filters: {
+        'All Supported': ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg',
+          'md', 'txt', 'csv', 'json', 'r', 'rmd', 'qmd', 'py', 'js', 'ts',
+          'jsx', 'tsx', 'html', 'css', 'scss', 'yaml', 'yml', 'toml', 'xml',
+          'sql', 'sh', 'bash', 'nix', 'lua', 'rb', 'go', 'rs', 'c', 'cpp',
+          'h', 'hpp', 'java', 'kt', 'swift', 'ini', 'cfg', 'conf', 'log', 'tex'],
+        'Images': ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'],
+        'Text': ['md', 'txt', 'csv', 'json', 'r', 'py', 'js', 'ts', 'html', 'css', 'yaml', 'yml', 'toml', 'sql', 'sh', 'nix'],
+      },
     });
-    if (uris && uris.length > 0) {
-      const filePaths = uris.map((u) => u.fsPath);
-      webview.postMessage({ type: 'imagesAttached', paths: filePaths });
+    if (!uris || uris.length === 0) return;
+
+    const imagePaths: string[] = [];
+    const textAttachments: Array<{ name: string; content: string }> = [];
+
+    for (const uri of uris) {
+      const ext = path.extname(uri.fsPath).toLowerCase();
+      if (ChatWebviewProvider.TEXT_EXTENSIONS.has(ext)) {
+        try {
+          const content = fs.readFileSync(uri.fsPath, 'utf-8');
+          const name = path.basename(uri.fsPath);
+          textAttachments.push({ name, content });
+        } catch (err: any) {
+          this.debugChannel?.appendLine(`[attach] Failed to read text file: ${err.message}`);
+        }
+      } else {
+        imagePaths.push(uri.fsPath);
+      }
+    }
+
+    if (imagePaths.length > 0) {
+      webview.postMessage({ type: 'imagesAttached', paths: imagePaths });
+    }
+    if (textAttachments.length > 0) {
+      webview.postMessage({ type: 'textFilesAttached', files: textAttachments });
     }
   }
 
@@ -673,7 +717,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private buildPromptWithIdeContext(userPrompt: string, isFirstTurn: boolean, cwd: string, images?: string[]): string {
+  private buildPromptWithIdeContext(userPrompt: string, isFirstTurn: boolean, cwd: string, images?: string[], textFiles?: Array<{ name: string; content: string }>): string {
     const parts: string[] = [];
 
     if (isFirstTurn) {
@@ -708,6 +752,12 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       );
     }
 
+    if (textFiles && textFiles.length > 0) {
+      for (const file of textFiles) {
+        parts.push(`[Attached file: ${file.name}]\n${file.content}`);
+      }
+    }
+
     const editor = vscode.window.activeTextEditor;
     if (editor && editor.selection && !editor.selection.isEmpty) {
       const activeFile = vscode.workspace.asRelativePath(editor.document.uri);
@@ -737,6 +787,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       this.sessionSkipPermissions = false;
       this.sessionAllowedCommands.clear();
       this.processManager.newSession();
+      return;
+    }
+
+    if (name === 'effort') {
+      const level = (arg || '').toLowerCase().trim();
+      let msg: string;
+      if (level === 'low' || level === 'medium' || level === 'high') {
+        this.effortLevel = level;
+        msg = `Reasoning effort set to **${level}**.`;
+      } else {
+        msg = `Usage: \`/effort low|medium|high\` (current: **${this.effortLevel}**)`;
+      }
+      const postMsg = (wv: vscode.Webview) => wv.postMessage({
+        type: 'slashResult',
+        name: 'effort',
+        message: msg,
+      });
+      if (targetWebview) {
+        postMsg(targetWebview);
+      } else {
+        this.getWebviews().forEach(postMsg);
+      }
       return;
     }
 
@@ -771,6 +843,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         '',
         '| Command | Description |',
         '| :--- | :--- |',
+        '| `/effort <low\\|medium\\|high>` | Set reasoning effort level |',
         '| `/sandbox <on\\|off>` | Toggle container sandboxing (`sandbox on` / `sandbox off`) |',
         '| `/dangerous <on\\|off>` | Toggle permission auto-approvals (`auto accept` / `default`) |',
         '| `/plan [description]` | Start Plan Mode and generate implementation plan |',
@@ -823,7 +896,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     this.onUserPrompt(promptText, []);
   }
 
-  private onUserPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
+  private onUserPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean, textFiles?: Array<{ name: string; content: string }>) {
     if (this.processManager.isBusy()) {
       this.isSteeringPivot = true;
       this.processManager.cancelCurrentTask();
@@ -833,7 +906,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
       setTimeout(() => {
         const steeringPrompt = `[MID-TURN STEERING NOTE]\nThe user has provided live guidance mid-turn. Please integrate the following note into your ongoing work immediately:\n${promptText}`;
-        this.executePrompt(steeringPrompt, images, dangerouslySkipPermissions);
+        this.executePrompt(steeringPrompt, images, dangerouslySkipPermissions, textFiles);
         this.isSteeringPivot = false;
       }, 180);
       return;
@@ -848,20 +921,20 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.dispatchPrompt(promptText, images, dangerouslySkipPermissions);
+    this.dispatchPrompt(promptText, images, dangerouslySkipPermissions, textFiles);
   }
 
-  private dispatchPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
+  private dispatchPrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean, textFiles?: Array<{ name: string; content: string }>) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const settingSkip = config.get<boolean>('dangerouslySkipPermissions') === true;
     const effectiveSkip = dangerouslySkipPermissions !== undefined
       ? dangerouslySkipPermissions
       : (settingSkip || this.sessionSkipPermissions);
 
-    this.executePrompt(promptText, images, effectiveSkip);
+    this.executePrompt(promptText, images, effectiveSkip, textFiles);
   }
 
-  private executePrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean) {
+  private executePrompt(promptText: string, images?: string[], dangerouslySkipPermissions?: boolean, textFiles?: Array<{ name: string; content: string }>) {
     const config = vscode.workspace.getConfiguration('antigravity');
     const cliPath = config.get<string>('cliPath') || 'agy';
     const cwd = this.resolveWorkingDirectory();
@@ -885,12 +958,16 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     const normalizedImages = images?.map((img) => toForwardSlash(img));
-    const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
+    const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages, textFiles);
+
+    const bypassSandbox = config.get<boolean>('bypassSandbox') === true;
 
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
       dangerouslySkipPermissions: skipPermissions,
+      sandbox: !bypassSandbox,
       images: normalizedImages,
       extraWorkspaceDirs,
+      effort: this.effortLevel,
     });
   }
 
@@ -1741,6 +1818,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private getHtmlForWebview(webview: vscode.Webview): string {
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js'));
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'main.css'));
+    const katexStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'katex', 'katex.min.css'));
     const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'antigravity-icon.svg'));
 
     return `<!DOCTYPE html>
@@ -1748,6 +1826,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link href="${katexStyleUri}" rel="stylesheet">
 	<link href="${styleUri}" rel="stylesheet">
 	<title>Antigravity</title>
 </head>

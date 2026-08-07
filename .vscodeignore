@@ -2,7 +2,9 @@ node_modules/**
 .antigravity/**
 .gemini/**
 .vscode/**
+.claude/**
 *.vsix
+AGY-PROJECT-DEVELOPMENT.md
 src/**
 tsconfig.json
 esbuild.js

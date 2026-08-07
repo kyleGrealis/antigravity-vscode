@@ -26,8 +26,10 @@ export class AgyProcessManager extends EventEmitter {
     prompt: string,
     options: {
       dangerouslySkipPermissions?: boolean;
+      sandbox?: boolean;
       images?: string[];
       extraWorkspaceDirs?: string[];
+      effort?: 'low' | 'medium' | 'high';
     } = {}
   ): void {
     if (this.turnActive && this.process) {
@@ -69,6 +71,14 @@ export class AgyProcessManager extends EventEmitter {
 
     if (this.currentConversationId) {
       args.push('--conversation', this.currentConversationId);
+    }
+
+    if (options.effort) {
+      args.push('--effort', options.effort);
+    }
+
+    if (options.sandbox) {
+      args.push('--sandbox');
     }
 
     if (options.dangerouslySkipPermissions === true) {

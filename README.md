@@ -1,6 +1,6 @@
 # Antigravity for VS Code
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.png)](LICENSE.txt)
 
 Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and Positron.
@@ -35,37 +35,56 @@ Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and 
 - **Prompt History**: `Up/Down Arrow` recalls previous prompts, scoped per workspace and persisted across sessions.
 - **Live Streaming & Smart Auto-Scroll**: Scroll lock preserves your reading position during active streaming.
 - **`@` File Mentions**: Case-insensitive workspace file search and context insertion.
-- **Image Support**: Paste or attach screenshots for visual context and UI debugging.
+- **Image & File Attachments**: Paste or attach screenshots, or use the paperclip to attach text files (`.md`, `.txt`, `.csv`, `.py`, etc.) with content inlined into the prompt.
+- **LaTeX Math Rendering**: Inline (`$...$`) and display (`$$...$$`) math renders as formatted equations via KaTeX.
 - **Slash Commands & Skills**: Control settings and execute custom agent skills (reads `~/.gemini/skills/`).
 - **Orphan Process Cleanup**: Kills stale agy processes on extension deactivate and before session switches.
 
 ---
 
-## Web App (agy-web)
+## Prerequisites
 
-The same webview bundle powers a standalone web app deployed via Express/SSE on a remote server. See [README-web.md](README-web.md) for details on the multi-persona web deployment (Qwerty + Milton), Cloudflare Access auth, light/dark theme, and mobile PWA support.
+### 1. Install the Antigravity CLI
 
----
+The extension requires Google's **Antigravity CLI (`agy`)** to be installed and authenticated on your machine. Follow the official installation guide:
 
-## Installation
+**[Install the Antigravity CLI](https://antigravity.google/docs/cli/install)**
 
-### From GitHub Release (VSIX)
-
-1. Download the latest `.vsix` file from the [Releases](https://github.com/kyleGrealis/antigravity-vscode/releases) page.
-2. In VS Code or Positron, open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
-3. Select **Extensions: Install from VSIX...** and choose the downloaded file.
+After installation, verify it's working:
 
 ```bash
-code --install-extension antigravity-vscode-0.2.1.vsix
-# or for Positron:
-positron --install-extension antigravity-vscode-0.2.1.vsix
+agy --version
 ```
+
+### 2. Authenticate in your terminal
+
+Before the extension can talk to agy, you need to log in once from a terminal:
+
+```bash
+agy auth login
+```
+
+This opens a browser window for Google OAuth. Once authenticated, the session persists and the extension will use the same credentials automatically.
+
+### 3. Install the extension
+
+Download the latest `.vsix` file from the [Releases](https://github.com/kyleGrealis/antigravity-vscode/releases) page, then install:
+
+```bash
+code --install-extension antigravity-vscode-0.2.2.vsix
+# or for Positron:
+positron --install-extension antigravity-vscode-0.2.2.vsix
+```
+
+Or install from the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) > **Extensions: Install from VSIX...**
+
+That's it -- open the Antigravity sidebar and start prompting.
 
 ---
 
 ## Requirements
 
-- **Antigravity CLI (`agy`)**: `>= 1.0.0` (verify with `agy --version`). Must be in your `PATH` or configured via `antigravity.cliPath`.
+- **Antigravity CLI (`agy`)**: `>= 1.0.0`. Must be in your `PATH` or configured via `antigravity.cliPath`.
 - **VS Code**: `^1.85.0` or **Positron**: `>= 2024.06.0`
 
 ---
@@ -79,6 +98,7 @@ positron --install-extension antigravity-vscode-0.2.1.vsix
 | Command | Description |
 | :--- | :--- |
 | `/plan [description]` | Enter Plan Mode and generate an implementation plan |
+| `/effort <low\|medium\|high>` | Set reasoning effort level |
 | `/sandbox <on\|off>` | Toggle container sandboxing |
 | `/dangerous <on\|off>` | Toggle permission auto-approvals |
 | `/usage` | Display session token statistics overlay |
@@ -117,7 +137,7 @@ positron --install-extension antigravity-vscode-0.2.1.vsix
 
 ## Known Issues
 
-> ~~**Binary image files (PNG, JPG, etc.) crash the agy CLI on Windows** (agy v1.1.10)~~ -- **Fixed in agy v1.1.11.** Image paste/attach now works on all platforms. Update with `pip install --upgrade antigravity-cli` or let the auto-updater handle it.
+> No known issues at this time.
 
 ---
 
@@ -127,14 +147,12 @@ positron --install-extension antigravity-vscode-0.2.1.vsix
 - [x] Workspace config injection (`.gemini/GEMINI.md`, `.gemini/AGENTS.md`)
 - [x] Orphan process cleanup and session hardening
 - [x] Mid-turn model steering
-- [ ] Interactive clarification cards for `ask_question` tool calls
 - [x] Background task kill via `manage_task` and `manage_subagents`
 - [x] Subagent tracking with live badge, timer, and inline kill button
-- [x] Font size controls (A-/A+) in web app
 - [x] Inline code styling cleanup (borderless)
-- [x] Token usage tracking in web app (`/usage` overlay + per-turn usage bar)
-- [x] Google Calendar/Gmail MCP integration for morning brief
-- [ ] Real-time tool output streaming in extension (buffered by agy upstream; needs trace logging to confirm)
+- [x] Text file attachments (`.md`, `.txt`, `.csv`, etc.)
+- [x] LaTeX / math rendering (KaTeX)
+- [ ] Interactive clarification cards for `ask_question` tool calls
 
 ---
 
