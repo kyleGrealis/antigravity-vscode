@@ -117,7 +117,7 @@ positron --install-extension antigravity-vscode-0.2.1.vsix
 
 ## Known Issues
 
-> **Binary image files (PNG, JPG, etc.) crash the agy CLI on Windows** (as of agy v1.1.10, August 3 2026 update). When the agent reads a binary image file via `ReadFile`/`view_file`, the session terminates and the conversation is permanently poisoned. Linux is unaffected. Use `/new` to start a fresh session. See [community report](https://discuss.ai.google.dev/t/antigravity-cli-stopped-reading-png-files/177160).
+> ~~**Binary image files (PNG, JPG, etc.) crash the agy CLI on Windows** (agy v1.1.10)~~ -- **Fixed in agy v1.1.11.** Image paste/attach now works on all platforms. Update with `pip install --upgrade antigravity-cli` or let the auto-updater handle it.
 
 ---
 
