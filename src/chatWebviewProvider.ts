@@ -76,6 +76,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private currentPanel?: vscode.WebviewPanel;
   private sessionSkipPermissions: boolean = false;
   private sessionAllowedCommands: Set<string> = new Set();
+  private effortLevel: 'low' | 'medium' | 'high' = 'medium';
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
   private isSteeringPivot = false;
@@ -226,6 +227,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'effort', description: 'set reasoning effort', hasArg: true, argHint: '<low|medium|high>', options: [
+        { value: 'low', label: 'quick lookups, simple tasks' },
+        { value: 'medium', label: 'balanced (default)' },
+        { value: 'high', label: 'deep analysis, complex reasoning' },
+      ]},
       { name: 'sandbox', description: 'toggle container sandboxing (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'dangerous', description: 'toggle permission auto-approvals (on/off)', hasArg: true, argHint: '<on|off>' },
       { name: 'settings', description: 'open extension settings' },
@@ -740,6 +746,28 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (name === 'effort') {
+      const level = (arg || '').toLowerCase().trim();
+      let msg: string;
+      if (level === 'low' || level === 'medium' || level === 'high') {
+        this.effortLevel = level;
+        msg = `Reasoning effort set to **${level}**.`;
+      } else {
+        msg = `Usage: \`/effort low|medium|high\` (current: **${this.effortLevel}**)`;
+      }
+      const postMsg = (wv: vscode.Webview) => wv.postMessage({
+        type: 'slashResult',
+        name: 'effort',
+        message: msg,
+      });
+      if (targetWebview) {
+        postMsg(targetWebview);
+      } else {
+        this.getWebviews().forEach(postMsg);
+      }
+      return;
+    }
+
     if (name === 'sandbox') {
       const config = vscode.workspace.getConfiguration('antigravity');
       const currentBypass = config.get<boolean>('bypassSandbox') === true;
@@ -771,6 +799,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         '',
         '| Command | Description |',
         '| :--- | :--- |',
+        '| `/effort <low\\|medium\\|high>` | Set reasoning effort level |',
         '| `/sandbox <on\\|off>` | Toggle container sandboxing (`sandbox on` / `sandbox off`) |',
         '| `/dangerous <on\\|off>` | Toggle permission auto-approvals (`auto accept` / `default`) |',
         '| `/plan [description]` | Start Plan Mode and generate implementation plan |',
@@ -887,10 +916,14 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     const normalizedImages = images?.map((img) => toForwardSlash(img));
     const finalPrompt = this.buildPromptWithIdeContext(promptText, isFirstTurn, cwd, normalizedImages);
 
+    const bypassSandbox = config.get<boolean>('bypassSandbox') === true;
+
     this.processManager.runPrompt(cliPath, cwd, finalPrompt, {
       dangerouslySkipPermissions: skipPermissions,
+      sandbox: !bypassSandbox,
       images: normalizedImages,
       extraWorkspaceDirs,
+      effort: this.effortLevel,
     });
   }
 

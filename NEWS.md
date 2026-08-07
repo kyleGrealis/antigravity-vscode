@@ -1,5 +1,11 @@
 # Release Notes
 
+## antigravity-vscode 0.2.2
+
+- **`/effort` slash command**: Set reasoning effort (low/medium/high) mid-session with autocomplete sub-menu. Passes `--effort` flag to agy CLI on each spawn.
+- **Sandbox flag wired**: `--sandbox` toggle now actually passes the flag to agy (was UI-only before).
+- **`/help` updated**: Added `/effort` to the help table.
+
 ## antigravity-vscode 0.2.1
 
 - **Subagent tracking**: Live badge, elapsed timer, and inline kill button on `invoke_subagent` tool cards.

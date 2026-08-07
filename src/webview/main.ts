@@ -468,7 +468,7 @@ function executeSlashCommand(name: string, arg?: string) {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }
-  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous') {
+  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous' || name === 'effort') {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }

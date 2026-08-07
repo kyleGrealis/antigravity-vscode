@@ -8,6 +8,7 @@ let slashFiltered: SlashDisplayItem[] = [];
 let slashTriggerPos = -1;
 
 let SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'effort', description: 'set reasoning effort (low, medium, high)', hasArg: true },
   { name: 'sandbox', description: 'toggle sandboxing (on|off)', hasArg: true },
   { name: 'dangerous', description: 'toggle permission auto-approvals (on|off)', hasArg: true },
   { name: 'plan', description: 'trigger plan mode with optional description', hasArg: true },
