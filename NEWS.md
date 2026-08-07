@@ -1,5 +1,18 @@
 # Release Notes
 
+## antigravity-vscode 0.2.1
+
+- **Subagent tracking**: Live badge, elapsed timer, and inline kill button on `invoke_subagent` tool cards.
+- **Task kill routing**: UUID subagent IDs route to `manage_subagents`, short task IDs route to `manage_task`.
+- **UUID false-positive fix**: Task tracker no longer matches calendar iCalUIDs or email message IDs as subagent tasks.
+- **Session delete**: Delete button with confirm dialog in session picker.
+- **Inline code styling**: Removed blue borders from inline `code` spans; softened background tint.
+- **Scrollbar layout**: Scrollbar hugs viewport edge while content stays centered.
+
+### Known upstream bug (Google) -- RESOLVED in agy 1.1.11
+
+The Windows PNG crash from agy v1.1.10 is **fixed in agy v1.1.11**. Binary image files (PNG, JPG, etc.) no longer crash the CLI on Windows. Image paste/attach works on all platforms.
+
 ## antigravity-vscode 0.2.0
 
 - **Workspace config injection**: Prepend `.gemini/GEMINI.md` and `.gemini/AGENTS.md` to first-turn prompts (`--print` mode skips workspace configs natively, so the extension injects them).
