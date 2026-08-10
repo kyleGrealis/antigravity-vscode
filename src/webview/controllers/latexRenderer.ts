@@ -1,9 +1,23 @@
 import katex from 'katex';
 import renderMathInElement from 'katex/contrib/auto-render';
 
-const TEX_COMMAND_RE = /\\(?:int|frac|sum|sqrt|begin|matrix|mathbf|mathcal|mathbb|mathrm|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|phi|psi|pi|infty|partial|nabla|left|right|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|subset|supset|cup|cap|forall|exists|lim|log|ln|sin|cos|tan|exp|det|max|min|sup|inf|binom|choose|text|operatorname|displaystyle)\b/;
+const TEX_COMMAND_RE = /\\(?:int|frac|sum|sqrt|begin|matrix|mathbf|mathcal|mathbb|mathrm|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|phi|psi|pi|infty|partial|nabla|left|right|cdot|times|div|pm|mp|le|ge|lt|gt|leq|geq|neq|approx|equiv|subset|supset|cup|cap|forall|exists|lim|log|ln|sin|cos|tan|exp|det|max|min|sup|inf|binom|choose|text|operatorname|displaystyle)\b/;
+
+function promoteCodeSpansToMath(container: HTMLElement) {
+  const codeEls = container.querySelectorAll('code');
+  codeEls.forEach((code) => {
+    if (code.closest('pre')) return;
+    const text = code.textContent || '';
+    if (TEX_COMMAND_RE.test(text) && !text.includes('`')) {
+      const math = document.createTextNode(`$${text}$`);
+      code.replaceWith(math);
+    }
+  });
+}
 
 function prepareMathInElement(container: HTMLElement) {
+  promoteCodeSpansToMath(container);
+
   // Process block-level elements (p, div, li, blockquote) first to catch multiline LaTeX environments and brackets
   const blocks = container.querySelectorAll('p, div, li, blockquote');
   blocks.forEach((block) => {

@@ -77,7 +77,7 @@ export function renderToolCallCard(
     killBtn.onclick = (e) => {
       e.stopPropagation();
       const parsedArgs = parseJsonArgs(tc.args);
-      const taskId = getArgVal(parsedArgs, 'TaskId', 'taskId', 'task_id') || tc.id;
+      const taskId = getArgVal(parsedArgs, 'TaskId', 'taskId', 'task_id');
       postMessage({ command: 'killTask', taskId: taskId });
     };
 

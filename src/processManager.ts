@@ -134,6 +134,10 @@ export class AgyProcessManager extends EventEmitter {
           this.turnActive = false;
         }
       } catch (e) {
+        if (/^log:|^messaging:|^DEBUG|^INFO|^WARN|^ERROR/i.test(trimmed)) {
+          this.emit('stderr', line + '\n');
+          return;
+        }
         this.emit('event', {
           event: 'agent_response',
           step_update: {
