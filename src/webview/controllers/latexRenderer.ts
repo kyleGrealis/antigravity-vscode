@@ -4,6 +4,32 @@ import renderMathInElement from 'katex/contrib/auto-render';
 const TEX_COMMAND_RE = /\\(?:int|frac|sum|sqrt|begin|matrix|mathbf|mathcal|mathbb|mathrm|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|phi|psi|pi|infty|partial|nabla|left|right|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|subset|supset|cup|cap|forall|exists|lim|log|ln|sin|cos|tan|exp|det|max|min|sup|inf|binom|choose|text|operatorname|displaystyle)\b/;
 
 function prepareMathInElement(container: HTMLElement) {
+  // Process block-level elements (p, div, li, blockquote) first to catch multiline LaTeX environments and brackets
+  const blocks = container.querySelectorAll('p, div, li, blockquote');
+  blocks.forEach((block) => {
+    if (block.querySelector('pre, code, .katex')) return;
+
+    const text = block.textContent || '';
+    if (!text.trim()) return;
+
+    // Promote standalone bracket-delimited display math: [ \int ... ] or [ \begin{...} ... ] across lines
+    if (/^\s*\[\s*\\/.test(text) && /\s*\]\s*$/.test(text) && (TEX_COMMAND_RE.test(text) || /\\begin\{/i.test(text))) {
+      const inner = text.replace(/^\s*\[\s*/, '').replace(/\s*\]\s*$/, '');
+      if (inner.trim()) {
+        block.textContent = `$$${inner.trim()}$$`;
+        return;
+      }
+    }
+
+    // Wrap un-enclosed \begin{env}...\end{env} blocks in display math ($$...$$) across multiline blocks
+    if (/\\begin\{[a-z0-9*]+\}/i.test(text) && /\\end\{[a-z0-9*]+\}/i.test(text) && !text.includes('$$')) {
+      const wrapped = text.replace(/(\\begin\{[a-z0-9*]+\}[\s\S]*?\\end\{[a-z0-9*]+\})/gi, '$$$$$1$$$$');
+      if (wrapped !== text) {
+        block.textContent = wrapped;
+      }
+    }
+  });
+
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       let parent = node.parentElement;
@@ -39,8 +65,8 @@ function prepareMathInElement(container: HTMLElement) {
     }
 
     // Wrap standalone \begin{env}...\end{env} in display math
-    if (/\\begin\{[a-z]+\}/i.test(text) && /\\end\{[a-z]+\}/i.test(text) && !text.includes('$$')) {
-      const wrapped = text.replace(/(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})/gi, '$$$$$1$$$$');
+    if (/\\begin\{[a-z0-9*]+\}/i.test(text) && /\\end\{[a-z0-9*]+\}/i.test(text) && !text.includes('$$')) {
+      const wrapped = text.replace(/(\\begin\{[a-z0-9*]+\}[\s\S]*?\\end\{[a-z0-9*]+\})/gi, '$$$$$1$$$$');
       if (wrapped !== text) {
         textNode.textContent = wrapped;
       }
