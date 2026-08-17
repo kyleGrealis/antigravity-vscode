@@ -79,6 +79,11 @@ export function parseJsonArgs(raw: any): any {
     if (parsed.input && typeof parsed.input === 'object') return parseJsonArgs(parsed.input);
     if (parsed.args && typeof parsed.args === 'object') return parseJsonArgs(parsed.args);
     if (parsed.tool_args && typeof parsed.tool_args === 'object') return parseJsonArgs(parsed.tool_args);
+    if (typeof parsed.questions === 'string') {
+      try {
+        parsed.questions = JSON.parse(parsed.questions);
+      } catch {}
+    }
   }
   return parsed;
 }
@@ -131,6 +136,16 @@ export function formatToolSummary(tc: ToolCall): { text: string; isFile?: boolea
   const query = getArgVal(args, 'Query', 'query', 'pattern', 'search');
   if (query && typeof query === 'string') {
     return { text: `"${query}"` };
+  }
+
+  if (Array.isArray(args.questions)) {
+    const qCount = args.questions.length;
+    return { text: `${qCount} question${qCount === 1 ? '' : 's'}` };
+  }
+
+  const singleQ = getArgVal(args, 'Question', 'question', 'title');
+  if (singleQ && typeof singleQ === 'string') {
+    return { text: singleQ.length > 50 ? `"${singleQ.substring(0, 47)}..."` : `"${singleQ}"` };
   }
 
   const keys = Object.keys(args);

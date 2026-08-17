@@ -8,67 +8,8 @@ import { DiffController } from './diffController';
 import { AgyStreamEvent } from './types';
 import { loadSkills } from './skillManager';
 import { toForwardSlash, normalizePath, normalizePathLower, isInsidePath } from './pathUtils';
-
-function formatPermissionError(res: any): any {
-  if (typeof res !== 'string') return res;
-  if (res.includes('Encountered error in step execution: user denied permission') || res.includes('User denied permission to run command:')) {
-    const match = res.match(/User denied permission to run command:\s*(.+)$/im);
-    const cmd = match ? match[1].trim() : '';
-    if (cmd) {
-      return `[Permission Required] Command '${cmd}' was blocked. Execute this command directly in your terminal, or enable 'antigravity.dangerouslySkipPermissions' in settings if desired.`;
-    }
-    return `[Permission Required] Tool execution was blocked by safety policy. Execute directly in your terminal if needed.`;
-  }
-  return res;
-}
-
-function cleanToolArgs(rawArgs: any): any {
-  if (!rawArgs) return undefined;
-  let parsed = rawArgs;
-  if (typeof parsed === 'string') {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      // not JSON
-    }
-  }
-  if (typeof parsed === 'string') {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {}
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    return typeof rawArgs === 'string' && rawArgs.trim() ? rawArgs.trim().replace(/^"|"$/g, '') : undefined;
-  }
-
-  const unquote = (val: any): any => {
-    if (typeof val === 'string') {
-      let s = val.trim();
-      if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-        try {
-          const unq = JSON.parse(s);
-          if (typeof unq === 'string') return unq;
-        } catch {
-          return s.slice(1, -1);
-        }
-      }
-      return val;
-    }
-    if (Array.isArray(val)) {
-      return val.map(unquote);
-    }
-    if (val && typeof val === 'object') {
-      const cleanedObj: Record<string, any> = {};
-      for (const k of Object.keys(val)) {
-        cleanedObj[k] = unquote(val[k]);
-      }
-      return cleanedObj;
-    }
-    return val;
-  };
-
-  return unquote(parsed);
-}
+import { getHtmlForWebview } from './webviewTemplate';
+import { processAgyStreamEvent } from './streamEventProcessor';
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'antigravityVSCodeSidebar';
@@ -175,7 +116,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: this.getResourceRoots(),
     };
 
-    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+    webviewView.webview.html = getHtmlForWebview(this.extensionUri, webviewView.webview);
     this.setupWebviewMessageListeners(webviewView.webview);
     this.sendSlashCommands(webviewView.webview);
     this.sendConfigUpdate(webviewView.webview);
@@ -200,7 +141,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     );
 
     this.currentPanel = panel;
-    panel.webview.html = this.getHtmlForWebview(panel.webview);
+    panel.webview.html = getHtmlForWebview(this.extensionUri, panel.webview);
     this.setupWebviewMessageListeners(panel.webview);
     this.sendSlashCommands(panel.webview);
     this.sendResourceMappings(panel.webview);
@@ -224,7 +165,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       { name: 'usage', description: 'show session token usage statistics overlay' },
       { name: 'goal', description: 'run a long-running task with extra thoroughness' },
       { name: 'schedule', description: 'set a timer or recurring cron schedule' },
-      { name: 'grill-me', description: 'interactive interview to resolve design decisions' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
       { name: 'effort', description: 'set reasoning effort', hasArg: true, argHint: '<low|medium|high>', options: [
@@ -309,22 +249,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
           this.getWebviews().forEach((wv) => wv.postMessage({ type: 'cancelled' }));
           break;
 
-        case 'killTask': {
-          const taskId = message.taskId;
-          if (taskId) {
-            if (this.processManager.isBusy()) {
-              this.processManager.cancelCurrentTask();
-            }
-            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId);
-            const cancelPrompt = isUuid
-              ? `Kill the running subagent "${taskId}" immediately. Use the manage_subagents tool with Action "kill" and ConversationIds ["${taskId}"].`
-              : `Cancel the running task "${taskId}" immediately. Use the manage_task tool with Action "cancel" and TaskId "${taskId}".`;
-            setTimeout(() => {
-              this.dispatchPrompt(cancelPrompt, []);
-            }, 250);
-          }
-          break;
-        }
 
         case 'planConfirmResponse': {
           const pending = this.pendingPlanPrompt;
@@ -687,6 +611,11 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
         fileUri = vscode.Uri.file(path.resolve(workspaceFolder, rawPath));
       }
 
+      if (fs.existsSync(fileUri.fsPath) && fs.statSync(fileUri.fsPath).isDirectory()) {
+        vscode.commands.executeCommand('revealInExplorer', fileUri);
+        return;
+      }
+
       const doc = await vscode.workspace.openTextDocument(fileUri);
       const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
 
@@ -872,13 +801,6 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (name === 'grill-me' || name === 'grillme') {
-      const topic = arg ? arg.trim() : 'the proposed feature implementation';
-      const grillPrompt = `[GRILL ME MODE] Conduct an interactive architectural interview with me about "${topic}". Inspect the codebase first, then ask 2-3 focused clarification questions about design trade-offs, scope boundaries, or edge cases using the ask_question tool. Do NOT write code or finalize a plan file until we have aligned on these choices.`;
-      this.onUserPrompt(grillPrompt, []);
-      return;
-    }
-
     if (name === 'plan') {
       const title = arg ? arg.trim() : 'Feature Plan';
 
@@ -1000,314 +922,20 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       this.saveSessionWorkspace(currentId, this.resolveWorkingDirectory());
     }
 
-    const webviews = this.getWebviews();
-
-    if (event.event === 'step_update' && event.step_update) {
-      const step = event.step_update as any;
-      const stepType = (step.step_type || step.type || '').toLowerCase();
-
-      const isThinkingStep =
-        stepType === 'thinking' ||
-        stepType === 'thought' ||
-        stepType === 'reasoning';
-
-      const thinkingDelta =
-        (isThinkingStep ? (step.text_delta || step.delta || step.text || step.content || step.thinking_delta || step.reasoning_content || step.thinking || step.thought) : null) ||
-        step.thinking_delta ||
-        step.reasoning_content ||
-        step.thinking ||
-        step.thought;
-
-      if (thinkingDelta) {
-        webviews.forEach((wv) =>
-          wv.postMessage({
-            type: 'thinkingDelta',
-            delta: thinkingDelta,
-          })
-        );
-      }
-
-      if (stepType === 'subagent' && step.subagent_info) {
-        const subs: any[] = step.subagent_info.subagents || [];
-        const saArgs: Record<string, string> = {};
-        let saResult = '';
-        if (subs.length > 0) {
-          saArgs.Name = subs[0].role || '';
-          saArgs.Prompt = subs[0].initial_prompt || '';
-          saResult = subs.map((s: any) => s.conversation_id || '').join(', ');
-        }
-        const saStatus = step.state === 'DONE' ? 'done' : step.state === 'ERROR' ? 'error' : 'running';
-        const saId = step.step_index !== undefined ? `step_${step.step_index}` : `subagent_${Date.now()}`;
-        webviews.forEach((wv) =>
-          wv.postMessage({
-            type: 'toolCall',
-            id: saId,
-            name: 'invoke_subagent',
-            args: saArgs,
-            status: saStatus,
-            result: saResult,
-          })
-        );
-      }
-
-      const toolInfo = step.tool_info || {};
-
-      const toolNameRaw = step.tool_name || toolInfo.name || step.tool || step.name || (step.tool_calls && step.tool_calls[0]?.name) || (step.tool_calls && step.tool_calls[0]?.tool_name);
-      const isKnownToolType = [
-        'run_command', 'view_file', 'grep_search', 'list_directory', 'list_dir',
-        'replace_file_content', 'multi_replace_file_content', 'write_to_file',
-        'ask_question', 'ask_permission', 'read_url_content', 'search_web',
-        'invoke_subagent', 'define_subagent', 'send_message', 'manage_task',
-        'manage_subagents', 'schedule', 'generate_image'
-      ].includes(stepType);
-
-      const isToolCall =
-        stepType === 'tool' ||
-        stepType === 'tool_call' ||
-        stepType === 'tool_use' ||
-        isKnownToolType ||
-        !!toolNameRaw ||
-        (Array.isArray(step.tool_calls) && step.tool_calls.length > 0);
-
-      if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) {
-        step.tool_calls.forEach((tcItem: any, idx: number) => {
-          let toolName = tcItem.name || tcItem.tool_name || tcItem.function?.name || stepType || 'Tool Execution';
-          toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
-
-          let rawArgs = tcItem.args || tcItem.tool_args || tcItem.input || tcItem.parameters || tcItem.function?.arguments || step.tool_args || step.args;
-          let toolArgs = cleanToolArgs(rawArgs);
-
-          let rawError = toolInfo.error || step.error || tcItem.error;
-          let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
-
-          let toolResult = tcItem.result || tcItem.output || tcItem.content || tcItem.diff || toolInfo.output || toolInfo.result || toolInfo.content || toolInfo.text || toolInfo.response || toolInfo.diff || toolInfo.changes || step.content || step.output || step.result || step.text || step.diff || (errorMessage ? `[Error] ${errorMessage}` : undefined);
-          toolResult = formatPermissionError(toolResult);
-          const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
-          const toolId = tcItem.id || tcItem.tool_call_id || tcItem.call_id || (step.step_index !== undefined ? `step_${step.step_index}_${idx}` : `${toolName}_${idx}`);
-
-          webviews.forEach((wv) =>
-            wv.postMessage({
-              type: 'toolCall',
-              id: toolId,
-              name: toolName,
-              args: toolArgs,
-              status: toolStatus,
-              result: toolResult,
-            })
-          );
-        });
-      } else if (isToolCall) {
-        let toolName = toolNameRaw || (isKnownToolType ? stepType : '');
-        if ((stepType === 'code_action' || stepType === 'cortex_step_type_code_action') && !toolName) {
-          toolName = 'replace_file_content';
-        }
-        toolName = toolName.toLowerCase().replace(/^(cortex_step_type_|step_type_)/, '');
-
-        let rawArgs = step.tool_args || step.args || step.input || step.parameters || toolInfo.parameters || toolInfo.args || step.call?.args || (step.tool_calls && step.tool_calls[0] ? (step.tool_calls[0].args || step.tool_calls[0].tool_args) : undefined);
-
-        let toolArgs = cleanToolArgs(rawArgs);
-
-        const editToolNames = ['replace_file_content', 'multi_replace_file_content', 'write_to_file', 'write_file', 'create_file', 'code_action'];
-        const isEditTool = editToolNames.includes(toolName);
-        const targetFile = toolArgs?.TargetFile || toolArgs?.targetFile || toolArgs?.target_file ||
-                           toolArgs?.AbsolutePath || toolArgs?.absolutePath || toolArgs?.path || toolArgs?.file ||
-                           toolArgs?.FilePath || toolArgs?.filePath;
-
+    processAgyStreamEvent(event, {
+      getWebviews: () => this.getWebviews(),
+      resolveWorkingDirectory: () => this.resolveWorkingDirectory(),
+      fileSnapshots: this.fileSnapshots,
+      debugChannel: this.debugChannel,
+      getConversationId: () => this.processManager.getConversationId(),
+      detectPlanFromToolCall: (step, toolName) => this.detectPlanFromToolCall(step, toolName),
+      ensureDebugChannel: () => {
         if (!this.debugChannel) {
           this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
         }
-
-        const fs = require('fs');
-        const { execSync } = require('child_process');
-        let computedDiff: string | undefined;
-
-        if (isEditTool && targetFile && (step.state === 'DONE' || step.state === 'SUCCESS')) {
-          const cwd = this.resolveWorkingDirectory();
-          const fwdFile = targetFile.replace(/\\/g, '/');
-          const fileName = fwdFile.split('/').pop() || 'file';
-
-          try {
-            const afterContent = fs.readFileSync(targetFile, 'utf-8');
-            const prevSnapshot = this.fileSnapshots.get(targetFile);
-
-            if (prevSnapshot !== undefined) {
-              if (prevSnapshot !== afterContent) {
-                const tmpBefore = require('path').join(require('os').tmpdir(), `agy-diff-before-${Date.now()}.tmp`);
-                try {
-                  fs.writeFileSync(tmpBefore, prevSnapshot);
-                  const raw = execSync(`git diff --no-index -- "${tmpBefore}" "${targetFile}"`, { encoding: 'utf-8', timeout: 5000 });
-                  if (raw && raw.trim()) computedDiff = raw.trim();
-                } catch (diffErr: any) {
-                  if (diffErr.stdout && diffErr.stdout.trim()) computedDiff = diffErr.stdout.trim();
-                } finally {
-                  try { fs.unlinkSync(tmpBefore); } catch {}
-                }
-                if (computedDiff) {
-                  const hunkIdx = computedDiff.indexOf('\n@@');
-                  if (hunkIdx !== -1) {
-                    computedDiff = `diff --git a/${fileName} b/${fileName}\n--- a/${fileName}\n+++ b/${fileName}` + computedDiff.substring(hunkIdx);
-                  }
-                }
-                this.debugChannel.appendLine(`[DIFF] snapshot-based diff for ${targetFile}`);
-              }
-            } else {
-              let beforeContent: string | null = null;
-              const isInsideWorkspace = isInsidePath(targetFile, cwd);
-              if (isInsideWorkspace) {
-                try {
-                  const relPath = require('path').relative(cwd, targetFile).replace(/\\/g, '/');
-                  beforeContent = execSync(`git show HEAD:"${relPath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
-                } catch {}
-              }
-              if (beforeContent !== null && beforeContent !== afterContent) {
-                const tmpBefore = require('path').join(require('os').tmpdir(), `agy-diff-before-${Date.now()}.tmp`);
-                try {
-                  fs.writeFileSync(tmpBefore, beforeContent);
-                  const raw = execSync(`git diff --no-index -- "${tmpBefore}" "${targetFile}"`, { encoding: 'utf-8', timeout: 5000 });
-                  if (raw && raw.trim()) computedDiff = raw.trim();
-                } catch (diffErr: any) {
-                  if (diffErr.stdout && diffErr.stdout.trim()) computedDiff = diffErr.stdout.trim();
-                } finally {
-                  try { fs.unlinkSync(tmpBefore); } catch {}
-                }
-                if (computedDiff) {
-                  const hunkIdx = computedDiff.indexOf('\n@@');
-                  if (hunkIdx !== -1) {
-                    computedDiff = `diff --git a/${fileName} b/${fileName}\n--- a/${fileName}\n+++ b/${fileName}` + computedDiff.substring(hunkIdx);
-                  }
-                }
-                this.debugChannel.appendLine(`[DIFF] git-based diff for ${targetFile}`);
-              } else if (beforeContent === null) {
-                const lines = afterContent.split('\n');
-                computedDiff = [
-                  `--- /dev/null`,
-                  `+++ b/${fileName}`,
-                  `@@ -0,0 +1,${lines.length} @@ new file`,
-                  ...lines.map((l: string) => `+${l}`)
-                ].join('\n');
-                this.debugChannel.appendLine(`[DIFF] new-file diff for ${targetFile} (${lines.length} lines)`);
-              }
-            }
-
-            this.fileSnapshots.set(targetFile, afterContent);
-          } catch (e: any) {
-            this.debugChannel.appendLine(`[DIFF] error=${e.message}`);
-          }
-        }
-
-        let rawError = toolInfo.error || step.error;
-        let errorMessage = rawError ? (typeof rawError === 'string' ? rawError : rawError.message || JSON.stringify(rawError)) : '';
-
-        let toolResult = toolInfo.output || toolInfo.result || toolInfo.content || toolInfo.text || toolInfo.response || toolInfo.diff || toolInfo.changes || step.content || step.output || step.result || step.text || step.diff || (errorMessage ? `[Error] ${errorMessage}` : undefined) || (step.state === 'DONE' ? step.text_delta : undefined);
-        if (computedDiff) {
-          toolResult = computedDiff;
-        }
-        toolResult = formatPermissionError(toolResult);
-
-        const isGenericName = !toolName || ['tool', 'tool_call', 'tool_use', 'tool execution', 'tool_execution'].includes(toolName);
-
-        if (!isGenericName || toolArgs || toolResult) {
-          if (isGenericName) toolName = 'Tool Execution';
-          const toolStatus = (step.state === 'DONE' || step.state === 'SUCCESS') ? 'done' : (step.state === 'ERROR' || step.state === 'FAILURE' || !!errorMessage) ? 'error' : 'running';
-          let toolId = step.tool_call_id || step.call_id || step.id;
-          if (!toolId && step.step_index !== undefined) {
-            toolId = `step_${step.step_index}_0`;
-          }
-          if (!toolId) toolId = toolName;
-
-          webviews.forEach((wv) =>
-            wv.postMessage({
-              type: 'toolCall',
-              id: toolId,
-              name: toolName,
-              args: toolArgs,
-              status: toolStatus,
-              result: toolResult,
-            })
-          );
-        }
-      }
-
-      const textDelta = step.text_delta || step.delta || step.text || step.content;
-      if (
-        !isThinkingStep &&
-        !isToolCall &&
-        stepType !== 'user_input' &&
-        textDelta
-      ) {
-        webviews.forEach((wv) =>
-          wv.postMessage({
-            type: 'textDelta',
-            delta: textDelta,
-          })
-        );
-      }
-
-      if (step.state === 'DONE' || step.state === 'SUCCESS') {
-        const writeToolNorms = new Set(['writetofile', 'writefile', 'createfile', 'replacefilecontent', 'multireplacefilecontent']);
-        const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
-        const allToolNames: string[] = [];
-        if (toolNameRaw) allToolNames.push(norm(toolNameRaw.replace(/^(cortex_step_type_|step_type_)/i, '')));
-        if (stepType) allToolNames.push(norm(stepType.replace(/^(cortex_step_type_|step_type_)/i, '')));
-        if (step.tool_info?.name) allToolNames.push(norm(step.tool_info.name));
-        if (Array.isArray(step.tool_calls)) {
-          step.tool_calls.forEach((tc: any) => {
-            const n = tc.name || tc.tool_name || tc.function?.name || '';
-            if (n) allToolNames.push(norm(n));
-          });
-        }
-        if (allToolNames.some(n => writeToolNorms.has(n))) {
-          this.detectPlanFromToolCall(step, allToolNames[0]);
-        }
-      }
-
-      if (step.state === 'DONE' && step.usage) {
-        const convId = event.conversation_id || this.processManager.getConversationId();
-        webviews.forEach((wv) =>
-          wv.postMessage({
-            type: 'stepComplete',
-            usage: step.usage,
-            conversationId: convId,
-          })
-        );
-      }
-    } else if (event.event === 'result' && event.result) {
-      const resultObj = event.result as any;
-      const responseText =
-        resultObj.response ||
-        resultObj.text ||
-        resultObj.content ||
-        resultObj.output ||
-        '';
-
-      const convId = event.conversation_id || this.processManager.getConversationId();
-      const errorText = resultObj.error || resultObj.error_message || resultObj.errorMessage || '';
-
-      if (resultObj.status === 'ERROR' || resultObj.status === 'FAILURE') {
-        if (!this.debugChannel) {
-          this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
-        }
-        this.debugChannel.appendLine(`[error] result status=${resultObj.status} error=${errorText || '(none)'}`);
-      }
-
-      webviews.forEach((wv) =>
-        wv.postMessage({
-          type: 'result',
-          status: resultObj.status,
-          response: responseText,
-          error: errorText,
-          usage: resultObj.usage,
-          conversationId: convId,
-        })
-      );
-    } else if (event.event === 'error') {
-      webviews.forEach((wv) =>
-        wv.postMessage({
-          type: 'error',
-          error: event.error,
-        })
-      );
-    }
+        return this.debugChannel;
+      },
+    });
   }
 
   public sendActiveFileContext() {
@@ -1813,105 +1441,5 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       console.error('Failed to list sessions:', err);
       return [];
     }
-  }
-
-  private getHtmlForWebview(webview: vscode.Webview): string {
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js'));
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'main.css'));
-    const katexStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'katex', 'katex.min.css'));
-    const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'antigravity-icon.svg'));
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<link href="${katexStyleUri}" rel="stylesheet">
-	<link href="${styleUri}" rel="stylesheet">
-	<title>Antigravity</title>
-</head>
-<body>
-	<div class="app-container">
-		<div class="header-bar">
-			<div class="header-left">
-				<img src="${logoUri}" class="header-logo" alt="Antigravity" />
-				<span id="header-session-title" class="header-title" title="Double click to rename session">Untitled</span>
-				<button id="edit-header-title-btn" class="icon-btn edit-title-btn" title="Rename session">&#9999;&#65039;</button>
-			</div>
-			<div class="header-actions">
-				<span id="header-workspace-badge" class="header-workspace-badge" style="display: none;"></span>
-				<button id="history-btn" class="icon-btn" title="Session History">&#128340;</button>
-				<button id="new-chat-btn" class="icon-btn" title="New conversation">+</button>
-			</div>
-		</div>
-
-		<div id="history-dropdown" class="history-dropdown" style="display: none;"></div>
-
-		<div id="chat-messages" class="message-log">
-			<div id="empty-state" class="empty-state">
-				<div class="empty-state-hero">
-					<img src="${logoUri}" class="empty-state-logo-img" alt="Antigravity" />
-					<div class="empty-state-title">Antigravity</div>
-					<div class="empty-state-subtitle">How can I help you build today?</div>
-				</div>
-				<div class="empty-state-suggestions">
-					<button class="suggestion-card" data-prompt="Explain the architecture of this workspace">
-						<span class="card-icon">🔍</span>
-						<span class="card-text">Explain workspace architecture</span>
-					</button>
-					<button class="suggestion-card" data-prompt="Help me write unit tests for this project">
-						<span class="card-icon">🧪</span>
-						<span class="card-text">Write unit tests</span>
-					</button>
-					<button class="suggestion-card" data-prompt="Find potential bugs or performance bottlenecks">
-						<span class="card-icon">⚡</span>
-						<span class="card-text">Audit bugs & performance</span>
-					</button>
-					<button class="suggestion-card" data-prompt="/plan Plan step-by-step feature implementation">
-						<span class="card-icon">📋</span>
-						<span class="card-text">Plan feature implementation</span>
-					</button>
-				</div>
-			</div>
-		</div>
-
-		<div id="task-tracker" class="task-tracker" style="display: none;"></div>
-			<div id="plan-confirm-bar" class="plan-confirm-bar" style="display: none;">
-				<span class="plan-confirm-text">It looks like you want a plan. Enter plan mode?</span>
-				<div class="plan-confirm-actions">
-					<button id="plan-confirm-yes" class="plan-confirm-btn plan-confirm-yes">Yes, plan mode</button>
-					<button id="plan-confirm-no" class="plan-confirm-btn plan-confirm-no">No, just send it</button>
-				</div>
-			</div>
-			<div class="input-area">
-			<div class="input-row">
-				<div id="slash-menu" class="slash-menu" style="display: none;"></div>
-				<div id="at-menu" class="at-menu" style="display: none;"></div>
-				<div class="prompt-box-container">
-					<div id="input-context-header" class="input-context-header">
-						<span id="context-hint" class="context-hint">Use @ to mention files or / for commands</span>
-						<div id="context-bar" class="context-bar" style="display: none;">
-							<span id="active-file-context" class="context-chip"></span>
-						</div>
-					</div>
-					<div id="image-attachment-bar" class="image-attachment-bar" style="display: none;"></div>
-					<textarea id="prompt-input" rows="1" placeholder="Ask Antigravity or describe a task..."></textarea>
-					<div class="input-footer">
-						<span id="status-text" class="input-hint status-indicator">enter to send, shift+enter for newline</span>
-						<div class="input-actions">
-							<span id="mode-text" class="mode-text" style="display: none;"></span>
-							<span id="sandbox-text" class="mode-text mode-sandbox" style="display: none;"></span>
-							<button id="attach-img-btn" class="icon-btn attach-btn" title="Attach Image">&#128206;</button>
-							<button id="cancel-btn" class="text-btn cancel-btn" style="display: none;">cancel</button>
-							<button id="send-btn" class="text-btn send-btn">send</button>
-						</div>
-					</div>
-				</div>
-			</div>
-		</div>
-	</div>
-	<script src="${scriptUri}"></script>
-</body>
-</html>`;
   }
 }

@@ -1,6 +1,6 @@
 # Antigravity for VS Code
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.png)](LICENSE.txt)
 
 Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and Positron.
@@ -135,9 +135,9 @@ That's it -- open the Antigravity sidebar and start prompting.
 
 ---
 
-## Known Issues
+## Known Limitations
 
-> No known issues at this time.
+- **Headless `ask_question` / `/grill-me` Dialogs**: In non-interactive print-stream mode (`-p`), the upstream Antigravity CLI processes `ask_question` internally and auto-skips without transmitting tool option payloads across the event stream. Design alignment questions are written directly by the model as standard numbered markdown text in the chat log instead of interactive form cards.
 
 ---
 
@@ -152,7 +152,7 @@ That's it -- open the Antigravity sidebar and start prompting.
 - [x] Inline code styling cleanup (borderless)
 - [x] Text file attachments (`.md`, `.txt`, `.csv`, etc.)
 - [x] LaTeX / math rendering (KaTeX)
-- [ ] Interactive clarification cards for `ask_question` tool calls
+- [x] Inline file path vs copyable code separation (click-to-open in editor)
 
 ---
 

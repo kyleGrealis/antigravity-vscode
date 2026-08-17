@@ -6,13 +6,12 @@ import { isDiffText, renderDiffOrTextHtml } from './utils/diffBuilder';
 import { renderToolCallCard } from './components/toolCard';
 import { initAtMenu, setAtFilteredFiles, getAtMatch, isAtMenuVisible, updateAtMenu, hideAtMenu, acceptAtItem, navigateAtMenu } from './controllers/atMenuController';
 import { initMermaidController, renderMermaidDiagrams } from './controllers/mermaidModal';
-import { renderLaTeX } from './controllers/latexRenderer';
+import { renderLaTeX, preprocessMarkdownMath } from './controllers/latexRenderer';
 import { initSlashMenu, setSlashCommands, isSlashMenuVisible, updateSlashMenu, hideSlashMenu, acceptSlashItem, navigateSlashMenu, getSlashCommands } from './controllers/slashMenuController';
 import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering, setIsRendering, setDirtyWhileScrolledUp, resetScrollState, showScrollToBottomPill, hideScrollToBottomPill, scrollToBottom, getScrollMetrics } from './controllers/scrollManager';
 import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
 import { initSessionHistory, updateWorkspaceHeaderBadge, renderHistoryDropdown } from './controllers/sessionHistory';
 import { initPlanCard, renderPlanCard, renderClarificationCard } from './controllers/planCard';
-import { initTaskTracker, processToolCallForTasks, clearTaskTracker, getRunningTaskIds } from './controllers/taskTracker';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -69,10 +68,6 @@ const atMenu = document.getElementById('at-menu') as HTMLElement;
 initAtMenu(input, atMenu, (msg: any) => vscode.postMessage(msg));
 initSlashMenu(input, slashMenu);
 initMermaidController(copyTextToClipboard);
-initTaskTracker(
-  document.getElementById('task-tracker') as HTMLElement,
-  (msg: any) => vscode.postMessage(msg)
-);
 initSessionHistory(historyDropdown, (msg: any) => vscode.postMessage(msg));
 initPlanCard({
   getMessages: () => messages,
@@ -392,7 +387,6 @@ cancelBtn?.addEventListener('click', () => {
 newChatBtn?.addEventListener('click', () => {
   messages = [];
   currentStreamingMessage = null;
-  clearTaskTracker();
   renderAll();
   vscode.postMessage({ command: 'newConversation' });
 });
@@ -821,7 +815,7 @@ function updateStreamingDOM() {
       renderAll();
       return;
     }
-    bodyEl.innerHTML = marked.parse(currentStreamingMessage.text) as string;
+    bodyEl.innerHTML = marked.parse(preprocessMarkdownMath(currentStreamingMessage.text)) as string;
     rewriteImageSources(bodyEl);
     applyDiffHighlighting(bodyEl);
     renderLaTeX(bodyEl);
@@ -951,7 +945,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
     const body = document.createElement('div');
     body.className = 'msg-body';
     if (msg.role === 'assistant' && msg.text) {
-      body.innerHTML = marked.parse(msg.text) as string;
+      body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
       applyDiffHighlighting(body);
       if (msg.isStreaming) {
         body.classList.add('streaming-cursor');
@@ -960,7 +954,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
       const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'Processing request...';
       body.innerHTML = `<div class="thinking-pulse"><span class="thinking-pulse-dot"></span><span>${pulseText}</span></div>`;
     } else if (msg.role === 'user' && msg.text) {
-      body.innerHTML = marked.parse(msg.text) as string;
+      body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
     } else {
       body.textContent = msg.text || '';
     }
@@ -988,7 +982,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
   attachInlineCodeCopyHandlers(log);
   rewriteImageSources(log);
   renderMermaidDiagrams(log);
-  renderLaTeX(log);
+  log.querySelectorAll('.msg-body').forEach((body) => renderLaTeX(body as HTMLElement));
 
   requestAnimationFrame(() => {
     if (autoScrollForce || wasAtBottom) {
@@ -1035,22 +1029,61 @@ function attachCopyButtons(container: HTMLElement) {
   });
 }
 
+function isFilePathOrDirectory(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length < 2) return false;
+
+  // Disqualify strings that look like commands with flags
+  if (t.includes(' ') && (t.includes(' -') || t.includes(' /') || /^(git|npm|npx|pnpm|yarn|code|agy|cargo|docker|kubectl|pip|python|node)\s/i.test(t))) {
+    return false;
+  }
+
+  // Windows absolute paths: C:\... or C:/...
+  if (/^[a-zA-Z]:[\\/]/.test(t)) return true;
+
+  // UNC or URI file paths
+  if (t.startsWith('\\\\') || t.startsWith('file://')) return true;
+
+  // Unix absolute or relative path markers
+  if (t.startsWith('/') || t.startsWith('./') || t.startsWith('../') || t.startsWith('~/')) {
+    return true;
+  }
+
+  // Relative path with directory separator
+  if ((t.includes('/') || t.includes('\\')) && !t.includes(' ') && !t.startsWith('-')) {
+    return true;
+  }
+
+  // Standalone filename with common code/config/data extension
+  if (/^[a-zA-Z0-9_\-.]+\.(ts|js|jsx|tsx|json|md|css|html|scss|py|r|R|sh|bash|yml|yaml|toml|svg|png|jpg|jpeg|gif|lock|kbd|nix|c|cpp|h|hpp|go|rs|java|sql)$/i.test(t)) {
+    return true;
+  }
+
+  return false;
+}
+
 function isCopyableInlineCode(text: string): boolean {
   const t = text.trim();
   if (!t || t.length < 2) return false;
 
+  // Never treat file or directory paths as click-to-copy
+  if (isFilePathOrDirectory(t)) {
+    return false;
+  }
+
+  // Exclude common language keywords, type names, and punctuation
   if (/^(true|false|null|undefined|void|any|string|number|boolean|object|const|let|var|if|else|return|export|import|from|[;,.:{}()\[\]=+-/*<>!&|]+)$/i.test(t)) {
     return false;
   }
 
-  if (t.includes(' ') || t.startsWith('-') || t.startsWith('./') || t.startsWith('/') || t.startsWith('\\')) {
-    return true;
-  }
-
-  const cliTools = /^(git|npm|npx|pnpm|yarn|node|python|pip|cargo|docker|kubectl|agy|code|cat|grep|ls|cd|mkdir|rm|cp|mv|find|ssh|curl|wget|bash|powershell|sh)$/i;
+  // CLI tools or commands
+  const cliTools = /^(git|npm|npx|pnpm|yarn|node|python|pip|cargo|docker|kubectl|agy|code|cat|grep|ls|cd|mkdir|rm|cp|mv|find|ssh|curl|wget|bash|powershell|sh)\b/i;
   if (cliTools.test(t)) return true;
 
-  if (/\.[a-zA-Z0-9]+$/.test(t) || t.includes('/')) return true;
+  // Flags or commands with arguments
+  if (t.startsWith('--') || (t.startsWith('-') && t.length <= 4) || (t.includes(' ') && !t.startsWith('['))) {
+    return true;
+  }
 
   return false;
 }
@@ -1061,17 +1094,31 @@ function attachInlineCodeCopyHandlers(container: HTMLElement) {
     if ((code as HTMLElement).dataset.hasCopyHandler) return;
     (code as HTMLElement).dataset.hasCopyHandler = 'true';
 
-    const text = code.textContent || '';
+    const text = (code.textContent || '').trim();
+    if (!text) return;
+
+    if (isFilePathOrDirectory(text)) {
+      (code as HTMLElement).classList.add('clickable-file');
+      (code as HTMLElement).title = 'Open in Editor';
+      code.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isWebMode) {
+          vscode.postMessage({ command: 'openFile', filePath: text });
+        }
+      });
+      return;
+    }
+
     if (!isCopyableInlineCode(text)) return;
 
     (code as HTMLElement).classList.add('copyable-inline');
     (code as HTMLElement).title = 'Click to copy';
     code.addEventListener('click', (e) => {
       e.stopPropagation();
-      const textToCopy = code.textContent || '';
-      if (!textToCopy.trim()) return;
+      const textToCopy = (code.textContent || '').trim();
+      if (!textToCopy) return;
 
-      copyTextToClipboard(textToCopy.trim());
+      copyTextToClipboard(textToCopy);
       const originalText = code.textContent;
       code.textContent = 'Copied!';
       setTimeout(() => {
@@ -1326,7 +1373,17 @@ window.addEventListener('message', (event) => {
             expanded: isPermError || data.status === 'error',
           });
         }
-        processToolCallForTasks(data.name, data.args, data.result, data.status);
+
+        const normToolName = (data.name || '').toLowerCase().replace(/[^a-z_]/g, '');
+        if (normToolName === 'ask_question' || normToolName === 'askquestion') {
+          const parsed = parseJsonArgs(data.args);
+          if (parsed && (parsed.questions || parsed.question || Array.isArray(parsed))) {
+            if (!targetMsg.clarification || !targetMsg.clarification._isSubmitted) {
+              targetMsg.clarification = parsed;
+            }
+          }
+        }
+
         renderAll();
       }
       break;
@@ -1566,6 +1623,15 @@ window.addEventListener('message', (event) => {
               result: evt.result,
               status: evt.status || 'done'
             });
+
+            const normHistoryName = (evt.name || '').toLowerCase().replace(/[^a-z_]/g, '');
+            if (normHistoryName === 'ask_question' || normHistoryName === 'askquestion') {
+              const parsed = parseJsonArgs(evt.args);
+              if (parsed && (parsed.questions || parsed.question || Array.isArray(parsed))) {
+                currentAssistantMsg.clarification = parsed;
+                currentAssistantMsg.clarification._isSubmitted = true;
+              }
+            }
           }
         }
       }

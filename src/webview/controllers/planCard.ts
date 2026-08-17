@@ -282,76 +282,189 @@ export function renderPlanCard(plan: { filePath: string; timestamp: string; titl
   return card;
 }
 
-export function renderClarificationCard(q: { question: string; options?: string[]; isMultiSelect?: boolean }): HTMLElement {
+export interface ClarificationQuestionItem {
+  question: string;
+  options?: string[];
+  isMultiSelect?: boolean;
+  is_multi_select?: boolean;
+}
+
+export function renderClarificationCard(q: any): HTMLElement {
   const card = document.createElement('div');
   card.className = 'clarification-card';
 
-  const title = document.createElement('div');
-  title.className = 'clarification-title';
-  title.innerHTML = `<span>Clarification Required:</span> ${esc(q.question)}`;
-  card.appendChild(title);
-
-  const optionsContainer = document.createElement('div');
-  optionsContainer.className = 'clarification-options';
-
-  const inputType = q.isMultiSelect ? 'checkbox' : 'radio';
-  const groupName = `clarification_${Date.now()}`;
-
-  if (q.options && q.options.length > 0) {
-    q.options.forEach((optText) => {
-      const label = document.createElement('label');
-      label.className = 'clarification-option-label';
-
-      const optInput = document.createElement('input');
-      optInput.type = inputType;
-      optInput.name = groupName;
-      optInput.value = optText;
-
-      const txt = document.createElement('span');
-      txt.textContent = optText;
-
-      label.appendChild(optInput);
-      label.appendChild(txt);
-      optionsContainer.appendChild(label);
-    });
+  // Normalize questions array
+  let rawQuestions: ClarificationQuestionItem[] = [];
+  if (typeof q === 'string') {
+    try {
+      q = JSON.parse(q);
+    } catch {}
+  }
+  if (Array.isArray(q)) {
+    rawQuestions = q;
+  } else if (q && Array.isArray(q.questions)) {
+    rawQuestions = q.questions;
+  } else if (q && typeof q.questions === 'string') {
+    try {
+      const parsedQ = JSON.parse(q.questions);
+      if (Array.isArray(parsedQ)) rawQuestions = parsedQ;
+      else if (parsedQ && typeof parsedQ === 'object') rawQuestions = [parsedQ];
+    } catch {}
+  } else if (q && (q.question || q.title)) {
+    rawQuestions = [{
+      question: q.question || q.title || 'Clarification Question',
+      options: q.options || [],
+      isMultiSelect: q.isMultiSelect ?? q.is_multi_select ?? false,
+    }];
   }
 
-  card.appendChild(optionsContainer);
+  if (rawQuestions.length === 0) {
+    card.style.display = 'none';
+    return card;
+  }
 
-  const customInput = document.createElement('input');
-  customInput.type = 'text';
-  customInput.className = 'clarification-input';
-  customInput.placeholder = 'Or type custom guidance / additional instructions...';
-  card.appendChild(customInput);
+  const isAlreadySubmitted = !!q._isSubmitted;
+  if (isAlreadySubmitted) {
+    card.classList.add('submitted');
+  }
+
+  const header = document.createElement('div');
+  header.className = 'clarification-header';
+  header.innerHTML = `<span class="clarification-badge">Clarification</span><span class="clarification-title">${rawQuestions.length === 1 ? esc(rawQuestions[0].question) : 'Please answer the following questions to proceed:'}</span>`;
+  card.appendChild(header);
+
+  const cardUid = `clarif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const questionBlocks: Array<{
+    item: ClarificationQuestionItem;
+    container: HTMLElement;
+    getSelection: () => { answers: string[]; custom: string };
+  }> = [];
+
+  rawQuestions.forEach((item, idx) => {
+    const block = document.createElement('div');
+    block.className = 'clarification-q-block';
+
+    if (rawQuestions.length > 1) {
+      const qTitle = document.createElement('div');
+      qTitle.className = 'clarification-q-title';
+      qTitle.innerHTML = `<span class="clarification-q-num">${idx + 1}.</span> ${esc(item.question)}`;
+      block.appendChild(qTitle);
+    }
+
+    const optionsContainer = document.createElement('div');
+    optionsContainer.className = 'clarification-options';
+
+    const isMulti = !!(item.isMultiSelect ?? item.is_multi_select);
+    const inputType = isMulti ? 'checkbox' : 'radio';
+    const groupName = `${cardUid}_q${idx}`;
+
+    if (item.options && item.options.length > 0) {
+      item.options.forEach((optText, optIdx) => {
+        const label = document.createElement('label');
+        label.className = 'clarification-option-label';
+
+        const optInput = document.createElement('input');
+        optInput.type = inputType;
+        optInput.name = groupName;
+        optInput.value = optText;
+        if (isAlreadySubmitted && Array.isArray(q._submittedAnswers?.[idx]) && q._submittedAnswers[idx].includes(optText)) {
+          optInput.checked = true;
+        }
+        if (isAlreadySubmitted) {
+          optInput.disabled = true;
+        }
+
+        const txt = document.createElement('span');
+        txt.textContent = optText;
+
+        label.appendChild(optInput);
+        label.appendChild(txt);
+        optionsContainer.appendChild(label);
+      });
+    }
+
+    block.appendChild(optionsContainer);
+
+    const customInput = document.createElement('input');
+    customInput.type = 'text';
+    customInput.className = 'clarification-input';
+    customInput.placeholder = 'Or type custom guidance / additional notes...';
+    if (isAlreadySubmitted && q._submittedCustom?.[idx]) {
+      customInput.value = q._submittedCustom[idx];
+      customInput.disabled = true;
+    } else if (isAlreadySubmitted) {
+      customInput.disabled = true;
+    }
+    block.appendChild(customInput);
+
+    questionBlocks.push({
+      item,
+      container: block,
+      getSelection: () => {
+        const checked = optionsContainer.querySelectorAll('input:checked');
+        const answers: string[] = [];
+        checked.forEach((el: any) => answers.push(el.value));
+        const custom = customInput.value.trim();
+        return { answers, custom };
+      },
+    });
+
+    card.appendChild(block);
+  });
 
   const actions = document.createElement('div');
   actions.className = 'plan-actions';
 
   const submitBtn = document.createElement('button');
   submitBtn.className = 'plan-btn plan-btn-primary';
-  submitBtn.textContent = 'Submit Response';
+  submitBtn.textContent = isAlreadySubmitted ? 'Responses Submitted' : 'Submit Responses';
+  if (isAlreadySubmitted) {
+    submitBtn.disabled = true;
+  }
+
   submitBtn.onclick = (e) => {
     e.stopPropagation();
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitted...';
+    submitBtn.textContent = 'Submitting...';
 
-    const checkedInputs = optionsContainer.querySelectorAll('input:checked');
-    const answers: string[] = [];
-    checkedInputs.forEach((el: any) => answers.push(el.value));
+    const recordedAnswers: string[][] = [];
+    const recordedCustom: string[] = [];
+    const responseLines: string[] = [];
 
-    const customText = customInput.value.trim();
-    if (customText) answers.push(`Custom: ${customText}`);
+    questionBlocks.forEach((qb, idx) => {
+      const sel = qb.getSelection();
+      recordedAnswers.push(sel.answers);
+      recordedCustom.push(sel.custom);
 
-    const responseMsg = answers.length > 0 ? `Selected choices: ${answers.join(' | ')}` : 'Proceed with default options.';
+      let line = '';
+      if (rawQuestions.length > 1) {
+        line += `${idx + 1}. ${qb.item.question}\n   `;
+      }
+      const parts: string[] = [];
+      if (sel.answers.length > 0) {
+        parts.push(sel.answers.join(' | '));
+      }
+      if (sel.custom) {
+        parts.push(`Custom: ${sel.custom}`);
+      }
+      line += parts.length > 0 ? parts.join(' -- ') : 'Proceed with default recommendation.';
+      responseLines.push(line);
+    });
 
+    q._isSubmitted = true;
+    q._submittedAnswers = recordedAnswers;
+    q._submittedCustom = recordedCustom;
+    card.classList.add('submitted');
+
+    const promptText = responseLines.join('\n');
     const inp = callbacks.getInput();
     if (inp) {
-      inp.value = responseMsg;
+      inp.value = promptText;
       callbacks.sendPrompt();
     }
   };
-  actions.appendChild(submitBtn);
 
+  actions.appendChild(submitBtn);
   card.appendChild(actions);
 
   return card;

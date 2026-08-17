@@ -1,5 +1,12 @@
 # Release Notes
 
+## antigravity-vscode 0.2.3
+
+- **Inline file path vs copyable code separation**: Inline code spans matching file and folder paths (`C:\...`, `/...`, relative paths, source files) now open in the editor or reveal in the file explorer when clicked, instead of copying to clipboard. Copy-to-clipboard is reserved for CLI commands and runnable snippets.
+- **LaTeX rendering isolation**: Scoped KaTeX math rendering strictly to message bodies (`.msg-body`) with `.tool-accordion` rejection, eliminating math parsing conflicts on dollar signs, terminal outputs, and file paths inside tool execution cards.
+- **Task tracker teardown**: Removed orphan DOM polling intervals and client-side task tracker containers in favor of stream-driven event lifecycles.
+- **Slash command cleanup**: Removed `/grill-me` from slash command completions due to upstream CLI print-stream mode limitations that auto-skip interactive tool prompts. Design interviews remain supported directly via standard chat prompting.
+
 ## antigravity-vscode 0.2.2
 
 - **LaTeX math rendering**: Inline (`$...$`) and display (`$$...$$`) math notation now renders as formatted equations via KaTeX. Includes a `prepareMathInElement` sanitizer that fixes markdown/HTML conflicts (emphasis tags inside math delimiters, bare `\begin` environments).

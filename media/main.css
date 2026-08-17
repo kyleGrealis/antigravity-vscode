@@ -653,47 +653,6 @@ html, body {
 }
 
 /* Task Tracker */
-.task-tracker {
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px max(16px, calc(50% - 480px));
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border);
-}
-
-.task-tracker-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.task-tracker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.task-tracker-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 3px 0;
-}
-
-.task-tracker-id {
-  font-size: 12px;
-  font-family: var(--vscode-editor-font-family, monospace);
-  color: var(--text-primary);
-}
-
-.task-tracker-elapsed {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
-}
 
 /* Plan Confirm Bar */
 .plan-confirm-bar {
@@ -743,37 +702,6 @@ html, body {
   background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
-/* Task Running Meta */
-.task-running-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  padding-right: 8px;
-  flex-shrink: 0;
-}
-
-.task-elapsed {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.task-kill-btn {
-  padding: 2px 8px;
-  font-size: 11px;
-  border-radius: 3px;
-  border: 1px solid rgba(255, 80, 80, 0.4);
-  background: rgba(255, 50, 50, 0.15);
-  color: #ff6b6b;
-  cursor: pointer;
-  line-height: 1.2;
-}
-
-.task-kill-btn:hover {
-  background: rgba(255, 50, 50, 0.3);
-  border-color: rgba(255, 80, 80, 0.6);
-}
 
 .subagent-badge {
   font-size: 10px;
@@ -1014,6 +942,20 @@ html, body {
 
 .msg-body code.copyable-inline:hover {
   background: rgba(138, 180, 248, 0.2);
+}
+
+.msg-body code.clickable-file {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(168, 199, 250, 0.35);
+  text-underline-offset: 2px;
+  transition: all 0.15s ease;
+}
+
+.msg-body code.clickable-file:hover {
+  background: rgba(138, 180, 248, 0.2);
+  color: #c2dbff;
+  text-decoration-color: #a8c7fa;
 }
 
 .msg-body pre {
@@ -1897,23 +1839,74 @@ html, body {
   border-left: 3px solid #e2b93d;
   border-radius: var(--radius);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.clarification-card.submitted {
+  border-left-color: var(--success, #4ec9b0);
+  opacity: 0.85;
+}
+
+.clarification-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.clarification-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(226, 185, 61, 0.2);
+  color: #e2b93d;
+}
+
+.clarification-card.submitted .clarification-badge {
+  background: rgba(78, 201, 176, 0.2);
+  color: var(--success, #4ec9b0);
 }
 
 .clarification-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  line-height: 1.4;
+}
+
+.clarification-q-block {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.clarification-q-block:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.clarification-q-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.clarification-q-num {
+  color: #e2b93d;
+  font-weight: 700;
 }
 
 .clarification-options {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 10px 0;
+  margin: 6px 0;
 }
 
 .clarification-option-label {
@@ -1935,6 +1928,16 @@ html, body {
   background: var(--bg-hover);
 }
 
+.clarification-card.submitted .clarification-option-label {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.clarification-card.submitted .clarification-option-label:hover {
+  border-color: var(--border);
+  background: var(--bg-primary);
+}
+
 .clarification-input {
   width: 100%;
   box-sizing: border-box;
@@ -1951,6 +1954,11 @@ html, body {
 .clarification-input:focus {
   outline: none;
   border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.clarification-card.submitted .clarification-input {
+  opacity: 0.8;
+  cursor: default;
 }
 
 /* Token Usage Overlay Modal */

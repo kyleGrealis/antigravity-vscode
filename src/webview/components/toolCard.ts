@@ -1,9 +1,7 @@
 import { ToolCall } from '../types';
 import { esc } from '../utils/escape';
-import { toPascalCaseName, formatToolSummary, formatToolArgsForDisplay, parseJsonArgs, getArgVal } from '../utils/formatters';
+import { toPascalCaseName, formatToolSummary, formatToolArgsForDisplay } from '../utils/formatters';
 import { buildDiffFromToolArgs, extractTargetFile, extractStringResult, renderDiffOrTextHtml } from '../utils/diffBuilder';
-import { getTaskStatus } from '../controllers/taskTracker';
-
 export function renderToolCallCard(
   tc: ToolCall,
   postMessage: (msg: any) => void,
@@ -52,100 +50,6 @@ export function renderToolCallCard(
   header.appendChild(statusIcon);
   header.appendChild(callSigEl);
 
-  const isTaskTool = ['manage_task', 'managetask', 'invoke_subagent', 'invokesubagent'].includes((tc.name || '').toLowerCase().replace(/[^a-z_]/g, ''));
-  if (isTaskTool && statusClass === 'running') {
-    const taskMeta = document.createElement('span');
-    taskMeta.className = 'task-running-meta';
-
-    const elapsed = document.createElement('span');
-    elapsed.className = 'task-elapsed';
-    const startTime = Date.now();
-    elapsed.textContent = '0s';
-    const timer = setInterval(() => {
-      const secs = Math.floor((Date.now() - startTime) / 1000);
-      elapsed.textContent = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
-      if (tc.status !== 'running') {
-        clearInterval(timer);
-        taskMeta.remove();
-      }
-    }, 1000);
-
-    const killBtn = document.createElement('button');
-    killBtn.className = 'task-kill-btn';
-    killBtn.textContent = 'Kill';
-    killBtn.title = 'Cancel this task';
-    killBtn.onclick = (e) => {
-      e.stopPropagation();
-      const parsedArgs = parseJsonArgs(tc.args);
-      const taskId = getArgVal(parsedArgs, 'TaskId', 'taskId', 'task_id');
-      postMessage({ command: 'killTask', taskId: taskId });
-    };
-
-    taskMeta.appendChild(elapsed);
-    taskMeta.appendChild(killBtn);
-    header.appendChild(taskMeta);
-  }
-
-  const subagentTools = ['invoke_subagent', 'invokesubagent', 'define_subagent', 'definesubagent'];
-  const isSubagentTool = subagentTools.includes((tc.name || '').toLowerCase().replace(/[^a-z_]/g, ''));
-  if (isSubagentTool && statusClass === 'done') {
-    const resultStr = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result || '');
-    const uuidMatch = resultStr.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
-    if (uuidMatch) {
-      const subagentId = uuidMatch[1];
-      const tracked = getTaskStatus(subagentId);
-      if (tracked && tracked.status === 'running') {
-        statusIcon.className = 'tool-status-icon running';
-        statusIcon.innerHTML = '&#9696;';
-
-        const subMeta = document.createElement('span');
-        subMeta.className = 'task-running-meta';
-
-        const badge = document.createElement('span');
-        badge.className = 'subagent-badge';
-        badge.textContent = 'subagent running';
-
-        const elapsed = document.createElement('span');
-        elapsed.className = 'task-elapsed';
-        const start = tracked.startTime;
-        const fmt = (ms: number) => {
-          const s = Math.floor(ms / 1000);
-          return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-        };
-        elapsed.textContent = fmt(Date.now() - start);
-        const timer = setInterval(() => {
-          const t = getTaskStatus(subagentId);
-          if (!t || t.status !== 'running') {
-            clearInterval(timer);
-            subMeta.remove();
-            statusIcon.className = 'tool-status-icon done';
-            statusIcon.innerHTML = '&#9679;';
-            return;
-          }
-          elapsed.textContent = fmt(Date.now() - start);
-        }, 1000);
-
-        const killBtn = document.createElement('button');
-        killBtn.className = 'task-kill-btn';
-        killBtn.textContent = 'Kill';
-        killBtn.title = 'Cancel this subagent';
-        killBtn.onclick = (e) => {
-          e.stopPropagation();
-          postMessage({ command: 'killTask', taskId: subagentId });
-        };
-
-        subMeta.appendChild(badge);
-        subMeta.appendChild(elapsed);
-        subMeta.appendChild(killBtn);
-        header.appendChild(subMeta);
-      } else if (tracked && tracked.status !== 'running') {
-        const doneBadge = document.createElement('span');
-        doneBadge.className = `subagent-badge subagent-${tracked.status}`;
-        doneBadge.textContent = `subagent ${tracked.status}`;
-        header.appendChild(doneBadge);
-      }
-    }
-  }
 
   header.appendChild(hintEl);
 
