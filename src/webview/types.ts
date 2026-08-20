@@ -7,6 +7,10 @@ export interface ToolCall {
   expanded?: boolean;
 }
 
+export type MessageContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'toolCalls'; tools: ToolCall[] };
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -19,6 +23,7 @@ export interface Message {
     total_tokens?: number;
   };
   toolCalls?: ToolCall[];
+  blocks?: MessageContentBlock[];
   isStreaming?: boolean;
   plan?: any;
   clarification?: any;

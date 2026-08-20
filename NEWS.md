@@ -1,5 +1,10 @@
 # Release Notes
 
+## antigravity-vscode 0.2.4
+
+- **Interleaved chronological tool and narrative stream blocks**: Tool executions and assistant narrative stream outputs now render in exact chronological sequence rather than bundling all tool cards at the top of the message.
+- **Ordered content blocks**: Migrated webview message model to structured `MessageContentBlock` streams, ensuring session history and live responses preserve step-by-step reasoning and tool call timelines.
+
 ## antigravity-vscode 0.2.3
 
 - **Inline file path vs copyable code separation**: Inline code spans matching file and folder paths (`C:\...`, `/...`, relative paths, source files) now open in the editor or reveal in the file explorer when clicked, instead of copying to clipboard. Copy-to-clipboard is reserved for CLI commands and runnable snippets.

@@ -1,5 +1,5 @@
 import { marked } from 'marked';
-import { Message } from './types';
+import { Message, ToolCall } from './types';
 import { esc } from './utils/escape';
 import { parseJsonArgs } from './utils/formatters';
 import { isDiffText, renderDiffOrTextHtml } from './utils/diffBuilder';
@@ -483,6 +483,7 @@ function executeSlashCommand(name: string, arg?: string) {
     thinking: '',
     isPlanMode: name === 'plan',
     toolCalls: [],
+    blocks: name === 'plan' ? [{ type: 'text', text: 'Analyzing workspace and generating implementation plan...' }] : [],
     isStreaming: true,
   };
   messages.push(currentStreamingMessage);
@@ -575,6 +576,8 @@ function sendPrompt() {
     currentStreamingMessage.isStreaming = false;
     if (!currentStreamingMessage.text && (!currentStreamingMessage.toolCalls || currentStreamingMessage.toolCalls.length === 0)) {
       currentStreamingMessage.text = '_[Interrupted by mid-turn steering]_';
+      if (!currentStreamingMessage.blocks) currentStreamingMessage.blocks = [];
+      currentStreamingMessage.blocks.push({ type: 'text', text: '_[Interrupted by mid-turn steering]_' });
     }
   }
 
@@ -593,6 +596,7 @@ function sendPrompt() {
     text: '',
     thinking: '',
     toolCalls: [],
+    blocks: [],
     isStreaming: true,
   };
   messages.push(currentStreamingMessage);
@@ -809,7 +813,27 @@ function updateStreamingDOM() {
     thinkingInner.textContent = currentStreamingMessage.thinking;
   }
 
-  if (currentStreamingMessage.text) {
+  if (currentStreamingMessage.blocks && currentStreamingMessage.blocks.length > 0) {
+    const lastBlock = currentStreamingMessage.blocks[currentStreamingMessage.blocks.length - 1];
+    if (lastBlock && lastBlock.type === 'text') {
+      const bodyEls = activeEl.querySelectorAll('.msg-body');
+      const lastBodyEl = bodyEls.length > 0 ? (bodyEls[bodyEls.length - 1] as HTMLElement) : null;
+      if (!lastBodyEl) {
+        renderAll();
+        return;
+      }
+      lastBodyEl.innerHTML = marked.parse(preprocessMarkdownMath(lastBlock.text)) as string;
+      rewriteImageSources(lastBodyEl);
+      applyDiffHighlighting(lastBodyEl);
+      renderLaTeX(lastBodyEl);
+      if (currentStreamingMessage.isStreaming) {
+        lastBodyEl.classList.add('streaming-cursor');
+      }
+    } else {
+      renderAll();
+      return;
+    }
+  } else if (currentStreamingMessage.text) {
     let bodyEl = activeEl.querySelector('.msg-body') as HTMLElement;
     if (!bodyEl) {
       renderAll();
@@ -897,6 +921,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
                                 !msg.text &&
                                 !msg.thinking &&
                                 (!msg.toolCalls || msg.toolCalls.length === 0) &&
+                                (!msg.blocks || msg.blocks.length === 0) &&
                                 !msg.plan &&
                                 !msg.clarification;
     if (isEmptyAssistantMsg) {
@@ -918,47 +943,86 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
       el.appendChild(renderThinking(msg.thinking, msg.isStreaming));
     }
 
-    if (msg.toolCalls && msg.toolCalls.length > 0) {
-      const toolSection = document.createElement('div');
-      toolSection.className = 'tool-section';
-
-      for (const tc of msg.toolCalls) {
-        const accordion = renderToolCallCard(
-          tc,
-          (m) => vscode.postMessage(m),
-          (autoScroll, isUser) => renderAll(autoScroll, isUser),
-          isWebMode
-        );
-        toolSection.appendChild(accordion);
+    if (msg.role === 'assistant') {
+      if (msg.plan && msg !== activeExecutingPlanMsg) {
+        el.appendChild(renderPlanCard(msg.plan));
       }
-      el.appendChild(toolSection);
-    }
 
-    if (msg.plan && msg !== activeExecutingPlanMsg) {
-      el.appendChild(renderPlanCard(msg.plan));
-    }
-
-    if (msg.clarification) {
-      el.appendChild(renderClarificationCard(msg.clarification));
-    }
-
-    const body = document.createElement('div');
-    body.className = 'msg-body';
-    if (msg.role === 'assistant' && msg.text) {
-      body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
-      applyDiffHighlighting(body);
-      if (msg.isStreaming) {
-        body.classList.add('streaming-cursor');
+      if (msg.clarification) {
+        el.appendChild(renderClarificationCard(msg.clarification));
       }
-    } else if (msg.role === 'assistant' && msg.isStreaming && !msg.text && (!msg.toolCalls || msg.toolCalls.length === 0) && (!msg.thinking || !msg.thinking.trim())) {
-      const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'Processing request...';
-      body.innerHTML = `<div class="thinking-pulse"><span class="thinking-pulse-dot"></span><span>${pulseText}</span></div>`;
-    } else if (msg.role === 'user' && msg.text) {
-      body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
-    } else {
-      body.textContent = msg.text || '';
-    }
-    if (body.innerHTML.trim() || body.textContent?.trim()) {
+
+      if (msg.blocks && msg.blocks.length > 0) {
+        for (let bIdx = 0; bIdx < msg.blocks.length; bIdx++) {
+          const block = msg.blocks[bIdx];
+          const isLastBlock = bIdx === msg.blocks.length - 1;
+
+          if (block.type === 'toolCalls' && block.tools.length > 0) {
+            const toolSection = document.createElement('div');
+            toolSection.className = 'tool-section';
+
+            for (const tc of block.tools) {
+              const accordion = renderToolCallCard(
+                tc,
+                (m) => vscode.postMessage(m),
+                (autoScroll, isUser) => renderAll(autoScroll, isUser),
+                isWebMode
+              );
+              toolSection.appendChild(accordion);
+            }
+            el.appendChild(toolSection);
+          } else if (block.type === 'text' && block.text) {
+            const body = document.createElement('div');
+            body.className = 'msg-body';
+            body.innerHTML = marked.parse(preprocessMarkdownMath(block.text)) as string;
+            applyDiffHighlighting(body);
+            if (msg.isStreaming && isLastBlock) {
+              body.classList.add('streaming-cursor');
+            }
+            el.appendChild(body);
+          }
+        }
+      } else {
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          const toolSection = document.createElement('div');
+          toolSection.className = 'tool-section';
+
+          for (const tc of msg.toolCalls) {
+            const accordion = renderToolCallCard(
+              tc,
+              (m) => vscode.postMessage(m),
+              (autoScroll, isUser) => renderAll(autoScroll, isUser),
+              isWebMode
+            );
+            toolSection.appendChild(accordion);
+          }
+          el.appendChild(toolSection);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'msg-body';
+        if (msg.text) {
+          body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
+          applyDiffHighlighting(body);
+          if (msg.isStreaming) {
+            body.classList.add('streaming-cursor');
+          }
+        } else if (msg.isStreaming && (!msg.toolCalls || msg.toolCalls.length === 0) && (!msg.thinking || !msg.thinking.trim())) {
+          const pulseText = msg.isPlanMode ? 'Analyzing workspace & generating implementation plan...' : 'Processing request...';
+          body.innerHTML = `<div class="thinking-pulse"><span class="thinking-pulse-dot"></span><span>${pulseText}</span></div>`;
+        }
+        if (body.innerHTML.trim() || body.textContent?.trim()) {
+          el.appendChild(body);
+        }
+      }
+    } else if (msg.role === 'user') {
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+      if (msg.text) {
+        body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
+      } else {
+        body.textContent = msg.text || '';
+      }
       el.appendChild(body);
     }
 
@@ -1290,6 +1354,13 @@ window.addEventListener('message', (event) => {
       if (isUserScrolledUp) setDirtyWhileScrolledUp(true);
       if (currentStreamingMessage) {
         currentStreamingMessage.text += data.delta;
+        if (!currentStreamingMessage.blocks) currentStreamingMessage.blocks = [];
+        const lastBlock = currentStreamingMessage.blocks[currentStreamingMessage.blocks.length - 1];
+        if (lastBlock && lastBlock.type === 'text') {
+          lastBlock.text += data.delta;
+        } else {
+          currentStreamingMessage.blocks.push({ type: 'text', text: data.delta });
+        }
         updateStreamingDOM();
       }
       break;
@@ -1364,14 +1435,23 @@ window.addEventListener('message', (event) => {
         } else {
           const isPermError = typeof data.result === 'string' && (data.result.includes('[Permission Required]') || data.result.includes('User denied permission') || data.result.includes('blocked by safety policy'));
           const parsedArgs = parseJsonArgs(data.args);
-          targetMsg.toolCalls.push({
+          const newToolCall: ToolCall = {
             id: data.id,
             name: (data.name && !isGenericName) ? data.name : 'Tool Execution',
             args: parsedArgs || data.args,
             status: data.status || 'done',
             result: data.result,
             expanded: isPermError || data.status === 'error',
-          });
+          };
+          targetMsg.toolCalls.push(newToolCall);
+
+          if (!targetMsg.blocks) targetMsg.blocks = [];
+          const lastBlock = targetMsg.blocks[targetMsg.blocks.length - 1];
+          if (lastBlock && lastBlock.type === 'toolCalls') {
+            lastBlock.tools.push(newToolCall);
+          } else {
+            targetMsg.blocks.push({ type: 'toolCalls', tools: [newToolCall] });
+          }
         }
 
         const normToolName = (data.name || '').toLowerCase().replace(/[^a-z_]/g, '');
@@ -1402,13 +1482,23 @@ window.addEventListener('message', (event) => {
       if (currentStreamingMessage) {
         if (!currentStreamingMessage.text && data.response && data.response.trim().length > 0) {
           currentStreamingMessage.text = data.response;
+          if (!currentStreamingMessage.blocks) currentStreamingMessage.blocks = [];
+          const lastBlock = currentStreamingMessage.blocks[currentStreamingMessage.blocks.length - 1];
+          if (lastBlock && lastBlock.type === 'text') {
+            lastBlock.text = data.response;
+          } else {
+            currentStreamingMessage.blocks.push({ type: 'text', text: data.response });
+          }
         }
         if (data.status === 'ERROR' || data.status === 'FAILURE') {
           if (!currentStreamingMessage.text &&
               (!currentStreamingMessage.thinking || !currentStreamingMessage.thinking.trim()) &&
               (!currentStreamingMessage.toolCalls || currentStreamingMessage.toolCalls.length === 0)) {
             const errDetail = data.error ? `: ${data.error}` : '';
-            currentStreamingMessage.text = `[Response failed${errDetail}] - try sending again`;
+            const errText = `[Response failed${errDetail}] - try sending again`;
+            currentStreamingMessage.text = errText;
+            if (!currentStreamingMessage.blocks) currentStreamingMessage.blocks = [];
+            currentStreamingMessage.blocks.push({ type: 'text', text: errText });
           }
         }
         if (data.usage) {
@@ -1424,9 +1514,17 @@ window.addEventListener('message', (event) => {
     case 'error':
       setBusy(false);
       if (currentStreamingMessage) {
+        const errText = `[error: ${data.error}]`;
         currentStreamingMessage.text = currentStreamingMessage.text
-          ? `${currentStreamingMessage.text}\n[error: ${data.error}]`
-          : `[error: ${data.error}]`;
+          ? `${currentStreamingMessage.text}\n${errText}`
+          : errText;
+        if (!currentStreamingMessage.blocks) currentStreamingMessage.blocks = [];
+        const lastBlock = currentStreamingMessage.blocks[currentStreamingMessage.blocks.length - 1];
+        if (lastBlock && lastBlock.type === 'text') {
+          lastBlock.text = `${lastBlock.text}\n${errText}`;
+        } else {
+          currentStreamingMessage.blocks.push({ type: 'text', text: errText });
+        }
         currentStreamingMessage.isStreaming = false;
       }
       currentStreamingMessage = null;
@@ -1594,7 +1692,8 @@ window.addEventListener('message', (event) => {
                 id: `msg-${Date.now()}-${Math.random()}`,
                 role: 'assistant',
                 text: evt.text,
-                tokens: evt.usage
+                tokens: evt.usage,
+                blocks: [{ type: 'text', text: evt.text }]
               };
               messages.push(currentAssistantMsg);
             } else {
@@ -1602,27 +1701,44 @@ window.addEventListener('message', (event) => {
               if (evt.usage) {
                 currentAssistantMsg.tokens = evt.usage;
               }
+              if (!currentAssistantMsg.blocks) currentAssistantMsg.blocks = [];
+              const lastBlock = currentAssistantMsg.blocks[currentAssistantMsg.blocks.length - 1];
+              if (lastBlock && lastBlock.type === 'text') {
+                lastBlock.text = (lastBlock.text ? lastBlock.text + '\n' : '') + evt.text;
+              } else {
+                currentAssistantMsg.blocks.push({ type: 'text', text: evt.text });
+              }
             }
           } else if (evt.type === 'toolCall') {
-            if (!currentAssistantMsg) {
-              currentAssistantMsg = {
-                id: `msg-${Date.now()}-${Math.random()}`,
-                role: 'assistant',
-                text: '',
-                toolCalls: []
-              };
-              messages.push(currentAssistantMsg);
-            }
-            if (!currentAssistantMsg.toolCalls) {
-              currentAssistantMsg.toolCalls = [];
-            }
-            currentAssistantMsg.toolCalls.push({
+            const tcItem: ToolCall = {
               id: `tc-${Date.now()}-${Math.random()}`,
               name: evt.name,
               args: evt.args,
               result: evt.result,
               status: evt.status || 'done'
-            });
+            };
+            if (!currentAssistantMsg) {
+              currentAssistantMsg = {
+                id: `msg-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                text: '',
+                toolCalls: [tcItem],
+                blocks: [{ type: 'toolCalls', tools: [tcItem] }]
+              };
+              messages.push(currentAssistantMsg);
+            } else {
+              if (!currentAssistantMsg.toolCalls) {
+                currentAssistantMsg.toolCalls = [];
+              }
+              currentAssistantMsg.toolCalls.push(tcItem);
+              if (!currentAssistantMsg.blocks) currentAssistantMsg.blocks = [];
+              const lastBlock = currentAssistantMsg.blocks[currentAssistantMsg.blocks.length - 1];
+              if (lastBlock && lastBlock.type === 'toolCalls') {
+                lastBlock.tools.push(tcItem);
+              } else {
+                currentAssistantMsg.blocks.push({ type: 'toolCalls', tools: [tcItem] });
+              }
+            }
 
             const normHistoryName = (evt.name || '').toLowerCase().replace(/[^a-z_]/g, '');
             if (normHistoryName === 'ask_question' || normHistoryName === 'askquestion') {
