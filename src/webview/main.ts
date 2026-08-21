@@ -36,6 +36,28 @@ let attachedImages: string[] = [];
 let attachedTextFiles: Array<{ name: string; content: string }> = [];
 let botDisplayName = 'antigravity';
 let isWebMode = false;
+let currentModel = 'gemini-3.7-flash-high';
+
+function formatModelLabel(modelName: string): { full: string; compact: string } {
+  let clean = modelName || 'gemini-3.7-flash-high';
+  let effort = '';
+  if (clean.endsWith('-high')) { effort = 'high'; clean = clean.slice(0, -5); }
+  else if (clean.endsWith('-medium')) { effort = 'medium'; clean = clean.slice(0, -7); }
+  else if (clean.endsWith('-low')) { effort = 'low'; clean = clean.slice(0, -4); }
+
+  let pretty = clean;
+  if (clean === 'gemini-3.7-flash') pretty = 'Gemini 3.7 Flash';
+  else if (clean === 'gemini-3.6-flash') pretty = 'Gemini 3.6 Flash';
+  else if (clean === 'gemini-3.5-flash') pretty = 'Gemini 3.5 Flash';
+  else if (clean === 'gemini-3.1-pro') pretty = 'Gemini 3.1 Pro';
+  else if (clean === 'claude-sonnet-4-6') pretty = 'Claude Sonnet 4.6';
+  else if (clean === 'claude-opus-4-6-thinking') pretty = 'Claude Opus 4.6';
+  else if (clean === 'gpt-oss-120b-medium') pretty = 'GPT-OSS 120B';
+
+  const full = effort ? `${pretty} (${effort})` : pretty;
+  const compact = effort ? `${pretty.replace('Gemini ', '').replace('Claude ', '')} · ${effort}` : pretty.replace('Gemini ', '').replace('Claude ', '');
+  return { full, compact };
+}
 
 const log = document.getElementById('chat-messages') as HTMLElement;
 
@@ -52,12 +74,100 @@ const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
 const newChatBtn = document.getElementById('new-chat-btn') as HTMLButtonElement;
 const historyBtn = document.getElementById('history-btn') as HTMLButtonElement;
 const historyDropdown = document.getElementById('history-dropdown') as HTMLElement;
+const headerMenuBtn = document.getElementById('header-menu-btn') as HTMLButtonElement;
+const headerSettingsDropdown = document.getElementById('header-settings-dropdown') as HTMLElement;
 const attachImgBtn = document.getElementById('attach-img-btn') as HTMLButtonElement;
 const imageBar = document.getElementById('image-attachment-bar') as HTMLElement;
 const statusEl = document.getElementById('status-text') as HTMLElement;
 const planConfirmBar = document.getElementById('plan-confirm-bar') as HTMLElement;
 const planConfirmYes = document.getElementById('plan-confirm-yes') as HTMLButtonElement;
 const planConfirmNo = document.getElementById('plan-confirm-no') as HTMLButtonElement;
+
+function renderSettingsDropdown() {
+  if (!headerSettingsDropdown) return;
+  const { full } = formatModelLabel(currentModel);
+
+  headerSettingsDropdown.innerHTML = `
+    <button class="settings-menu-item" id="menu-model-item">
+      <div class="settings-menu-left">
+        <span class="settings-menu-icon">⚡</span>
+        <span>Model</span>
+      </div>
+      <span class="settings-menu-value">${esc(full)}</span>
+    </button>
+    <button class="settings-menu-item" id="menu-history-item">
+      <div class="settings-menu-left">
+        <span class="settings-menu-icon">🕒</span>
+        <span>Session History</span>
+      </div>
+      <span>›</span>
+    </button>
+    <button class="settings-menu-item" id="menu-new-chat-item">
+      <div class="settings-menu-left">
+        <span class="settings-menu-icon">➕</span>
+        <span>New Session</span>
+      </div>
+    </button>
+    <button class="settings-menu-item" id="menu-usage-item">
+      <div class="settings-menu-left">
+        <span class="settings-menu-icon">📊</span>
+        <span>Token Statistics</span>
+      </div>
+    </button>
+    <div class="settings-menu-divider"></div>
+    <button class="settings-menu-item" id="menu-clear-item">
+      <div class="settings-menu-left">
+        <span class="settings-menu-icon">🗑️</span>
+        <span>Clear Chat</span>
+      </div>
+    </button>
+  `;
+
+  document.getElementById('menu-model-item')?.addEventListener('click', () => {
+    headerSettingsDropdown.style.display = 'none';
+    input.value = '/model ';
+    input.focus();
+    updateSlashMenu();
+  });
+
+  document.getElementById('menu-history-item')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    headerSettingsDropdown.style.display = 'none';
+    if (historyDropdown) {
+      historyDropdown.style.display = 'block';
+      historyDropdown.innerHTML = '<div class="history-header">Loading sessions...</div>';
+      vscode.postMessage({ command: 'getSessions' });
+    }
+  });
+
+  document.getElementById('menu-new-chat-item')?.addEventListener('click', () => {
+    headerSettingsDropdown.style.display = 'none';
+    messages = [];
+    currentStreamingMessage = null;
+    renderAll();
+    vscode.postMessage({ command: 'newConversation' });
+  });
+
+  document.getElementById('menu-usage-item')?.addEventListener('click', () => {
+    headerSettingsDropdown.style.display = 'none';
+    showUsageOverlay(messages, activeConversationId);
+  });
+
+  document.getElementById('menu-clear-item')?.addEventListener('click', () => {
+    headerSettingsDropdown.style.display = 'none';
+    executeSlashCommand('clear');
+  });
+}
+
+headerMenuBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (headerSettingsDropdown.style.display === 'flex' || headerSettingsDropdown.style.display === 'block') {
+    headerSettingsDropdown.style.display = 'none';
+  } else {
+    renderSettingsDropdown();
+    headerSettingsDropdown.style.display = 'flex';
+  }
+});
 
 planConfirmYes.addEventListener('click', () => {
   planConfirmBar.style.display = 'none';
@@ -410,6 +520,12 @@ historyBtn?.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (e) => {
+  if (headerSettingsDropdown && headerSettingsDropdown.style.display !== 'none') {
+    if (!headerSettingsDropdown.contains(e.target as Node) && e.target !== headerMenuBtn) {
+      headerSettingsDropdown.style.display = 'none';
+    }
+  }
+
   if (historyDropdown && historyDropdown.style.display === 'block') {
     if (!historyDropdown.contains(e.target as Node) && e.target !== historyBtn) {
       historyDropdown.style.display = 'none';
@@ -1549,6 +1665,16 @@ window.addEventListener('message', (event) => {
         setAtFilteredFiles(data.files || []);
       } else {
         hideAtMenu();
+      }
+      break;
+    }
+
+    case 'updateModel': {
+      if (data.model) {
+        currentModel = data.model;
+        if (headerMenuBtn) {
+          headerMenuBtn.title = `Menu & Actions (Model: ${currentModel})`;
+        }
       }
       break;
     }

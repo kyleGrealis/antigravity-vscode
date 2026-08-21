@@ -2,7 +2,7 @@
 	"name": "antigravity-vscode",
 	"displayName": "Orbit",
 	"description": "Orbit companion for Google Antigravity in Positron & VS Code",
-	"version": "0.2.4",
+	"version": "0.2.5",
 	"publisher": "antigravity",
 	"license": "MIT",
 	"repository": {

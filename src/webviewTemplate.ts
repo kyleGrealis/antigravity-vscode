@@ -27,11 +27,12 @@ export function getHtmlForWebview(extensionUri: vscode.Uri, webview: vscode.Webv
 			</div>
 			<div class="header-actions">
 				<span id="header-workspace-badge" class="header-workspace-badge" style="display: none;"></span>
-				<button id="history-btn" class="icon-btn" title="Session History">&#128340;</button>
 				<button id="new-chat-btn" class="icon-btn" title="New conversation">+</button>
+				<button id="header-menu-btn" class="icon-btn" title="Menu & Actions">&#8942;</button>
 			</div>
 		</div>
 
+		<div id="header-settings-dropdown" class="header-settings-dropdown" style="display: none;"></div>
 		<div id="history-dropdown" class="history-dropdown" style="display: none;"></div>
 
 		<div id="chat-messages" class="message-log">

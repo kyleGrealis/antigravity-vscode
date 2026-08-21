@@ -1,5 +1,12 @@
 # Release Notes
 
+## antigravity-vscode 0.2.5
+
+- **Header actions dropdown menu (`[⋮]`)**: Replaced scattered header buttons with a unified dropdown menu housing active model status, session history, new conversation, token usage statistics, and clear chat.
+- **Model selector and reasoning effort resolution**: Added `/model` slash command autocomplete and smart CLI argument resolution that prevents conflicts between effort suffixes and `--effort` flags across third-party models and Google Gemini tiers.
+- **Clickable token usage tracker**: Clicking the token usage status bar in the chat footer now directly launches the comprehensive session token usage modal.
+- **Mermaid diagram node text wrapping**: Fixed text overflow in Mermaid diagrams with automatic word wrapping and responsive SVG viewport scaling.
+
 ## antigravity-vscode 0.2.4
 
 - **Interleaved chronological tool and narrative stream blocks**: Tool executions and assistant narrative stream outputs now render in exact chronological sequence rather than bundling all tool cards at the top of the message.
