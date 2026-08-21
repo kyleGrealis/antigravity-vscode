@@ -6,7 +6,7 @@ import { isDiffText, renderDiffOrTextHtml } from './utils/diffBuilder';
 import { renderToolCallCard } from './components/toolCard';
 import { initAtMenu, setAtFilteredFiles, getAtMatch, isAtMenuVisible, updateAtMenu, hideAtMenu, acceptAtItem, navigateAtMenu } from './controllers/atMenuController';
 import { initMermaidController, renderMermaidDiagrams } from './controllers/mermaidModal';
-import { renderLaTeX, preprocessMarkdownMath } from './controllers/latexRenderer';
+import { renderLaTeX, extractMathTokens, restoreMathTokens } from './controllers/latexRenderer';
 import { initSlashMenu, setSlashCommands, isSlashMenuVisible, updateSlashMenu, hideSlashMenu, acceptSlashItem, navigateSlashMenu, getSlashCommands } from './controllers/slashMenuController';
 import { initScrollManager, isUserScrolledUp, dirtyWhileScrolledUp, isRendering, setIsRendering, setDirtyWhileScrolledUp, resetScrollState, showScrollToBottomPill, hideScrollToBottomPill, scrollToBottom, getScrollMetrics } from './controllers/scrollManager';
 import { saveSessionUsage, showUsageOverlay } from './controllers/usageTracker';
@@ -14,6 +14,13 @@ import { initSessionHistory, updateWorkspaceHeaderBadge, renderHistoryDropdown }
 import { initPlanCard, renderPlanCard, renderClarificationCard } from './controllers/planCard';
 
 marked.setOptions({ breaks: true, gfm: true });
+
+function parseMarkdownWithMath(text: string): string {
+  if (!text) return '';
+  const { text: cleanText, tokens } = extractMathTokens(text);
+  const rawHtml = marked.parse(cleanText) as string;
+  return restoreMathTokens(rawHtml, tokens);
+}
 
 declare function acquireVsCodeApi(): any;
 const vscode = acquireVsCodeApi();
@@ -464,7 +471,7 @@ function executeSlashCommand(name: string, arg?: string) {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }
-  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous' || name === 'effort') {
+  if (name === 'settings' || name === 'help' || name === 'sandbox' || name === 'dangerous' || name === 'effort' || name === 'model') {
     vscode.postMessage({ command: 'slashCommand', name, arg });
     return;
   }
@@ -822,7 +829,7 @@ function updateStreamingDOM() {
         renderAll();
         return;
       }
-      lastBodyEl.innerHTML = marked.parse(preprocessMarkdownMath(lastBlock.text)) as string;
+      lastBodyEl.innerHTML = parseMarkdownWithMath(lastBlock.text);
       rewriteImageSources(lastBodyEl);
       applyDiffHighlighting(lastBodyEl);
       renderLaTeX(lastBodyEl);
@@ -839,7 +846,7 @@ function updateStreamingDOM() {
       renderAll();
       return;
     }
-    bodyEl.innerHTML = marked.parse(preprocessMarkdownMath(currentStreamingMessage.text)) as string;
+    bodyEl.innerHTML = parseMarkdownWithMath(currentStreamingMessage.text);
     rewriteImageSources(bodyEl);
     applyDiffHighlighting(bodyEl);
     renderLaTeX(bodyEl);
@@ -974,7 +981,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
           } else if (block.type === 'text' && block.text) {
             const body = document.createElement('div');
             body.className = 'msg-body';
-            body.innerHTML = marked.parse(preprocessMarkdownMath(block.text)) as string;
+            body.innerHTML = parseMarkdownWithMath(block.text);
             applyDiffHighlighting(body);
             if (msg.isStreaming && isLastBlock) {
               body.classList.add('streaming-cursor');
@@ -1002,7 +1009,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
         const body = document.createElement('div');
         body.className = 'msg-body';
         if (msg.text) {
-          body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
+          body.innerHTML = parseMarkdownWithMath(msg.text);
           applyDiffHighlighting(body);
           if (msg.isStreaming) {
             body.classList.add('streaming-cursor');
@@ -1019,7 +1026,7 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
       const body = document.createElement('div');
       body.className = 'msg-body';
       if (msg.text) {
-        body.innerHTML = marked.parse(preprocessMarkdownMath(msg.text)) as string;
+        body.innerHTML = parseMarkdownWithMath(msg.text);
       } else {
         body.textContent = msg.text || '';
       }
@@ -1029,6 +1036,8 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
     if (msg.tokens && (msg.tokens.input_tokens || msg.tokens.output_tokens)) {
       const usage = document.createElement('div');
       usage.className = 'usage-bar';
+      usage.title = 'Click to open detailed session token usage statistics';
+      usage.style.cursor = 'pointer';
       const inVal = msg.tokens.input_tokens || 0;
       const outVal = msg.tokens.output_tokens || 0;
       let html = `<span class="usage-label">in:</span> ${inVal} <span class="usage-sep">/</span> <span class="usage-label">out:</span> ${outVal}`;
@@ -1036,6 +1045,9 @@ function renderAll(autoScrollForce: boolean = false, isUserInteraction: boolean 
         html += ` <span class="usage-sep">/</span> <span class="usage-label">think:</span> ${msg.tokens.thinking_tokens}`;
       }
       usage.innerHTML = html;
+      usage.addEventListener('click', () => {
+        showUsageOverlay(messages, activeConversationId);
+      });
       el.appendChild(usage);
     }
 

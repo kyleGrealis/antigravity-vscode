@@ -20,6 +20,19 @@ function initMermaid() {
     securityLevel: 'loose',
     theme: isDark ? 'dark' : 'default',
     fontFamily: 'var(--font-mono, Consolas, monospace)',
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 15,
+      nodeSpacing: 50,
+      rankSpacing: 50,
+    },
+    sequence: {
+      useMaxWidth: true,
+      wrap: true,
+      width: 150,
+    },
   });
   mermaidInitialized = true;
 }

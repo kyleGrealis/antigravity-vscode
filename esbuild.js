@@ -30,14 +30,6 @@ function syncToInstalledExtension() {
       }
     }
     console.log(`Synced build to ${targetDir}`);
-
-    const entries = fs.readdirSync(extensionsDir);
-    for (const e of entries) {
-      if (e.startsWith('antigravity.antigravity-vscode-') && e !== path.basename(targetDir)) {
-        fs.rmSync(path.join(extensionsDir, e), { recursive: true, force: true });
-        console.log(`Removed old extension: ${e}`);
-      }
-    }
   } catch (err) {
     console.error('Failed to sync to installed extension:', err);
   }

@@ -9,15 +9,24 @@ export class AgyProcessManager extends EventEmitter {
   private process: ChildProcess | null = null;
   private rl: readline.Interface | null = null;
   private currentConversationId: string | null = null;
+  private activeCliPath: string | null = null;
+  private activeCwd: string | null = null;
+  private activeOptionsHash: string | null = null;
   private turnActive = false;
-  private spawnTimestamp = 0;
+  private turnStartTimestamp = 0;
 
   public getConversationId(): string | null {
     return this.currentConversationId;
   }
 
   public setConversationId(id: string | null): void {
-    this.currentConversationId = id;
+    if (this.currentConversationId !== id) {
+      this.currentConversationId = id;
+      // Terminate old process if switching to a different conversation
+      if (this.process) {
+        this.killProcess();
+      }
+    }
   }
 
   public runPrompt(
@@ -30,6 +39,7 @@ export class AgyProcessManager extends EventEmitter {
       images?: string[];
       extraWorkspaceDirs?: string[];
       effort?: 'low' | 'medium' | 'high';
+      model?: string;
     } = {}
   ): void {
     if (this.turnActive && this.process) {
@@ -39,10 +49,45 @@ export class AgyProcessManager extends EventEmitter {
       this.turnActive = false;
     }
 
+    this.turnActive = true;
+    this.turnStartTimestamp = Date.now();
+
+    const optionsHash = JSON.stringify({
+      effort: options.effort,
+      model: options.model,
+      sandbox: options.sandbox,
+      dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+      extraWorkspaceDirs: options.extraWorkspaceDirs,
+    });
+
+    const isProcessUsable =
+      this.process &&
+      !this.process.killed &&
+      this.activeCliPath === cliPath &&
+      this.activeCwd === cwd &&
+      this.activeOptionsHash === optionsHash;
+
+    const payload = JSON.stringify({
+      event: 'user',
+      message: {
+        content: prompt,
+      },
+    }) + '\n';
+
+    if (isProcessUsable && this.process && this.process.stdin && !this.process.stdin.destroyed) {
+      // Warm process already active: dispatch turn immediately with zero spawn latency
+      this.process.stdin.write(payload);
+      return;
+    }
+
+    // Need to spawn fresh persistent stream-json process
     this.killProcess();
     this.turnActive = true;
+    this.activeCliPath = cliPath;
+    this.activeCwd = cwd;
+    this.activeOptionsHash = optionsHash;
 
-    const args: string[] = ['--output-format', 'stream-json', '-p', prompt];
+    const args: string[] = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
 
     if (cwd) {
       args.push('--add-dir', cwd);
@@ -73,7 +118,14 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--conversation', this.currentConversationId);
     }
 
-    if (options.effort) {
+    if (options.model) {
+      args.push('--model', options.model);
+      const hasEffortSuffix = /-(?:high|medium|low)$/i.test(options.model);
+      const isThirdParty = /claude|gpt|anthropic|openai/i.test(options.model);
+      if (!hasEffortSuffix && !isThirdParty && options.effort) {
+        args.push('--effort', options.effort);
+      }
+    } else if (options.effort) {
       args.push('--effort', options.effort);
     }
 
@@ -85,14 +137,16 @@ export class AgyProcessManager extends EventEmitter {
       args.push('--dangerously-skip-permissions');
     }
 
-    this.spawnTimestamp = Date.now();
-
     const proc = spawn(cliPath, args, {
       cwd,
       env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
     });
     this.process = proc;
+
+    // Send the turn payload immediately on stdin
+    proc.stdin?.write(payload);
 
     const rlInst = readline.createInterface({
       input: proc.stdout!,
@@ -119,12 +173,12 @@ export class AgyProcessManager extends EventEmitter {
           this.currentConversationId = parsed.step_update.conversation_id;
         }
 
-        if (eventType === 'init' && this.spawnTimestamp) {
-          const initMs = Date.now() - this.spawnTimestamp;
+        if (eventType === 'init' && this.turnStartTimestamp) {
+          const initMs = Date.now() - this.turnStartTimestamp;
           this.emit('timing', { phase: 'spawn-to-init', ms: initMs });
         }
-        if (eventType === 'result' && this.spawnTimestamp) {
-          const totalMs = Date.now() - this.spawnTimestamp;
+        if (eventType === 'result' && this.turnStartTimestamp) {
+          const totalMs = Date.now() - this.turnStartTimestamp;
           this.emit('timing', { phase: 'total', ms: totalMs });
         }
 
@@ -193,7 +247,9 @@ export class AgyProcessManager extends EventEmitter {
       this.rl = null;
     }
     if (this.process) {
-      this.process.kill('SIGTERM');
+      try {
+        this.process.kill('SIGTERM');
+      } catch {}
       this.process = null;
     }
     this.turnActive = false;
@@ -202,8 +258,7 @@ export class AgyProcessManager extends EventEmitter {
   public cancelCurrentTask(): void {
     if (this.process && this.turnActive) {
       const procToKill = this.process;
-      this.process = null;
-      this.turnActive = false;
+      this.killProcess();
       procToKill.kill('SIGINT');
       this.emit('cancelled');
     }

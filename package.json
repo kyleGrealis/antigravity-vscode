@@ -1,7 +1,7 @@
 {
 	"name": "antigravity-vscode",
-	"displayName": "Antigravity for VS Code",
-	"description": "Antigravity CLI inside VS Code: Harness the power of Google Antigravity directly in your editor",
+	"displayName": "Orbit",
+	"description": "Orbit companion for Google Antigravity in Positron & VS Code",
 	"version": "0.2.4",
 	"publisher": "antigravity",
 	"license": "MIT",
@@ -18,6 +18,7 @@
 		"Chat"
 	],
 	"keywords": [
+		"orbit",
 		"antigravity",
 		"agy",
 		"ai",
@@ -31,7 +32,7 @@
 	"main": "./dist/extension.js",
 	"contributes": {
 		"configuration": {
-			"title": "Antigravity Code",
+			"title": "Orbit (Antigravity)",
 			"properties": {
 				"antigravity.cliPath": {
 					"type": "string",
@@ -47,40 +48,92 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Bypass sandbox container isolation for tool command executions."
+				},
+				"antigravity.model": {
+					"type": "string",
+					"default": "gemini-3.7-flash-high",
+					"enum": [
+						"gemini-3.7-flash-high",
+						"gemini-3.7-flash-medium",
+						"gemini-3.7-flash-low",
+						"gemini-3.6-flash-high",
+						"gemini-3.6-flash-medium",
+						"gemini-3.6-flash-low",
+						"gemini-3.5-flash-high",
+						"gemini-3.5-flash-medium",
+						"gemini-3.5-flash-low",
+						"gemini-3.1-pro-high",
+						"gemini-3.1-pro-low",
+						"claude-sonnet-4-6",
+						"claude-opus-4-6-thinking",
+						"gpt-oss-120b-medium"
+					],
+					"enumDescriptions": [
+						"Gemini 3.7 Flash (High reasoning effort)",
+						"Gemini 3.7 Flash (Medium reasoning effort)",
+						"Gemini 3.7 Flash (Low reasoning effort)",
+						"Gemini 3.6 Flash (High reasoning effort)",
+						"Gemini 3.6 Flash (Medium reasoning effort)",
+						"Gemini 3.6 Flash (Low reasoning effort)",
+						"Gemini 3.5 Flash (High reasoning effort)",
+						"Gemini 3.5 Flash (Medium reasoning effort)",
+						"Gemini 3.5 Flash (Low reasoning effort)",
+						"Gemini 3.1 Pro (High reasoning effort)",
+						"Gemini 3.1 Pro (Low reasoning effort)",
+						"Claude Sonnet 4.6 (Thinking)",
+						"Claude Opus 4.6 (Thinking)",
+						"GPT-OSS 120B (Medium reasoning effort)"
+					],
+					"description": "Active AI model used for Antigravity sessions."
+				},
+				"antigravity.effort": {
+					"type": "string",
+					"default": "medium",
+					"enum": [
+						"low",
+						"medium",
+						"high"
+					],
+					"enumDescriptions": [
+						"Low reasoning effort for rapid, concise responses",
+						"Medium reasoning effort (balanced for coding and tool execution)",
+						"High reasoning effort for deep architectural analysis and multi-step tasks"
+					],
+					"description": "Default reasoning effort level for Antigravity sessions."
 				}
 			}
 		},
 		"commands": [
 			{
 				"command": "antigravity-vscode.editor.open",
-				"title": "Antigravity: Open in New Tab",
+				"title": "Orbit: Open in New Tab",
 				"icon": "$(layout-sidebar-right-off)"
 			},
 			{
 				"command": "antigravity-vscode.sidebar.open",
-				"title": "Antigravity: Open in Side Bar",
+				"title": "Orbit: Open in Side Bar",
 				"icon": "$(layout-sidebar-right)"
 			},
 			{
 				"command": "antigravity-vscode.newConversation",
-				"title": "Antigravity: New Conversation",
+				"title": "Orbit: New Conversation",
 				"icon": "$(add)"
 			},
 			{
 				"command": "antigravity-vscode.acceptProposedDiff",
-				"title": "Antigravity: Accept Proposed Changes",
+				"title": "Orbit: Accept Proposed Changes",
 				"enablement": "antigravity-vscode.viewingProposedDiff",
 				"icon": "$(check)"
 			},
 			{
 				"command": "antigravity-vscode.rejectProposedDiff",
-				"title": "Antigravity: Reject Proposed Changes",
+				"title": "Orbit: Reject Proposed Changes",
 				"enablement": "antigravity-vscode.viewingProposedDiff",
 				"icon": "$(discard)"
 			},
 			{
 				"command": "antigravity-vscode.focus",
-				"title": "Antigravity: Focus Input",
+				"title": "Orbit: Focus Input",
 				"icon": "$(keyboard)"
 			}
 		],
@@ -104,7 +157,7 @@
 			"activitybar": [
 				{
 					"id": "antigravity-sidebar-container",
-					"title": "Antigravity",
+					"title": "ORBIT",
 					"icon": "media/antigravity-icon.svg"
 				}
 			]
@@ -114,7 +167,7 @@
 				{
 					"type": "webview",
 					"id": "antigravityVSCodeSidebar",
-					"name": "Antigravity",
+					"name": "ORBIT",
 					"icon": "media/antigravity-icon.svg"
 				}
 			]

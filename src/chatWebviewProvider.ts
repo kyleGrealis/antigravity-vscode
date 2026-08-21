@@ -18,6 +18,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
   private sessionSkipPermissions: boolean = false;
   private sessionAllowedCommands: Set<string> = new Set();
   private effortLevel: 'low' | 'medium' | 'high' = 'medium';
+  private activeModel: string = 'gemini-3.7-flash-high';
   private lastUserPrompt: { promptText: string; images?: string[] } | null = null;
   private pendingPrompt: { promptText: string; images?: string[] } | null = null;
   private isSteeringPivot = false;
@@ -28,6 +29,9 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     private readonly diffController: DiffController,
     private readonly context?: vscode.ExtensionContext
   ) {
+    const config = vscode.workspace.getConfiguration('antigravity');
+    this.effortLevel = config.get<'low' | 'medium' | 'high'>('effort') || 'medium';
+    this.activeModel = config.get<string>('model') || 'gemini-3.7-flash-high';
     this.debugChannel = vscode.window.createOutputChannel('Antigravity Debug', { log: true });
     this.debugChannel.clear();
 
@@ -167,6 +171,22 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       { name: 'schedule', description: 'set a timer or recurring cron schedule' },
       { name: 'teamwork-preview', description: 'orchestrate autonomous subagent team' },
       { name: 'learn', description: 'save workflow/lessons to skills/knowledge-base' },
+      { name: 'model', description: 'select active AI model', hasArg: true, argHint: '<model-id>', options: [
+        { value: 'gemini-3.7-flash-high', label: 'Gemini 3.7 Flash (High reasoning)' },
+        { value: 'gemini-3.7-flash-medium', label: 'Gemini 3.7 Flash (Medium reasoning)' },
+        { value: 'gemini-3.7-flash-low', label: 'Gemini 3.7 Flash (Low reasoning)' },
+        { value: 'gemini-3.6-flash-high', label: 'Gemini 3.6 Flash (High reasoning)' },
+        { value: 'gemini-3.6-flash-medium', label: 'Gemini 3.6 Flash (Medium reasoning)' },
+        { value: 'gemini-3.6-flash-low', label: 'Gemini 3.6 Flash (Low reasoning)' },
+        { value: 'gemini-3.5-flash-high', label: 'Gemini 3.5 Flash (High reasoning)' },
+        { value: 'gemini-3.5-flash-medium', label: 'Gemini 3.5 Flash (Medium reasoning)' },
+        { value: 'gemini-3.5-flash-low', label: 'Gemini 3.5 Flash (Low reasoning)' },
+        { value: 'gemini-3.1-pro-high', label: 'Gemini 3.1 Pro (High reasoning)' },
+        { value: 'gemini-3.1-pro-low', label: 'Gemini 3.1 Pro (Low reasoning)' },
+        { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Thinking)' },
+        { value: 'claude-opus-4-6-thinking', label: 'Claude Opus 4.6 (Thinking)' },
+        { value: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium reasoning)' },
+      ]},
       { name: 'effort', description: 'set reasoning effort', hasArg: true, argHint: '<low|medium|high>', options: [
         { value: 'low', label: 'quick lookups, simple tasks' },
         { value: 'medium', label: 'balanced (default)' },
@@ -220,7 +240,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
 
   public sendActiveModel(targetWebview?: vscode.Webview) {
     const config = vscode.workspace.getConfiguration('antigravity');
-    const model = config.get<string>('model') || 'gemini-2.5-pro';
+    const model = config.get<string>('model') || this.activeModel || 'gemini-3.7-flash-high';
     const webviews = targetWebview ? [targetWebview] : this.getWebviews();
     webviews.forEach(wv => {
       wv.postMessage({ type: 'updateModel', model });
@@ -719,14 +739,46 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (name === 'model') {
+      const config = vscode.workspace.getConfiguration('antigravity');
+      const targetModel = (arg || '').trim();
+      let msg: string;
+      if (targetModel) {
+        this.activeModel = targetModel;
+        config.update('model', targetModel, vscode.ConfigurationTarget.Global);
+        msg = `Active model set to **${targetModel}**.`;
+        this.sendActiveModel();
+      } else {
+        msg = `Usage: \`/model <model-id>\` (current: **${this.activeModel}**)`;
+      }
+      const postMsg = (wv: vscode.Webview) => wv.postMessage({
+        type: 'slashResult',
+        name: 'model',
+        message: msg,
+      });
+      if (targetWebview) {
+        postMsg(targetWebview);
+      } else {
+        this.getWebviews().forEach(postMsg);
+      }
+      return;
+    }
+
     if (name === 'effort') {
+      const config = vscode.workspace.getConfiguration('antigravity');
       const level = (arg || '').toLowerCase().trim();
       let msg: string;
       if (level === 'low' || level === 'medium' || level === 'high') {
         this.effortLevel = level;
-        msg = `Reasoning effort set to **${level}**.`;
+        config.update('effort', level, vscode.ConfigurationTarget.Global);
+        if (/-(?:high|medium|low)$/i.test(this.activeModel)) {
+          this.activeModel = this.activeModel.replace(/-(?:high|medium|low)$/i, `-${level}`);
+          config.update('model', this.activeModel, vscode.ConfigurationTarget.Global);
+          this.sendActiveModel();
+        }
+        msg = `Reasoning effort set to **${level}** (active model: **${this.activeModel}**).`;
       } else {
-        msg = `Usage: \`/effort low|medium|high\` (current: **${this.effortLevel}**)`;
+        msg = `Usage: \`/effort low|medium|high\` (current: **${this.effortLevel}**, active model: **${this.activeModel}**)`;
       }
       const postMsg = (wv: vscode.Webview) => wv.postMessage({
         type: 'slashResult',
@@ -890,6 +942,7 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
       images: normalizedImages,
       extraWorkspaceDirs,
       effort: this.effortLevel,
+      model: this.activeModel || config.get<string>('model'),
     });
   }
 
@@ -1189,9 +1242,10 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     try {
       const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
       const convDir = path.join(brainDir, convId);
-      if (fs.existsSync(convDir)) {
-        fs.writeFileSync(path.join(convDir, 'title.txt'), title.trim(), 'utf-8');
+      if (!fs.existsSync(convDir)) {
+        fs.mkdirSync(convDir, { recursive: true });
       }
+      fs.writeFileSync(path.join(convDir, 'title.txt'), title.trim(), 'utf-8');
     } catch (err) {
       console.error('Failed to save session title:', err);
     }

@@ -20,6 +20,8 @@ export function getHtmlForWebview(extensionUri: vscode.Uri, webview: vscode.Webv
 		<div class="header-bar">
 			<div class="header-left">
 				<img src="${logoUri}" class="header-logo" alt="Antigravity" />
+				<span class="header-brand">ANTIGRAVITY</span>
+				<span class="header-sep">/</span>
 				<span id="header-session-title" class="header-title" title="Double click to rename session">Untitled</span>
 				<button id="edit-header-title-btn" class="icon-btn edit-title-btn" title="Rename session">&#9999;&#65039;</button>
 			</div>

@@ -8,6 +8,7 @@ let slashFiltered: SlashDisplayItem[] = [];
 let slashTriggerPos = -1;
 
 let SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'model', description: 'select active AI model (e.g. gemini-3.7-flash-high, claude-sonnet-4-6)', hasArg: true },
   { name: 'effort', description: 'set reasoning effort (low, medium, high)', hasArg: true },
   { name: 'sandbox', description: 'toggle sandboxing (on|off)', hasArg: true },
   { name: 'dangerous', description: 'toggle permission auto-approvals (on|off)', hasArg: true },
