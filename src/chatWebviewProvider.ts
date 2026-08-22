@@ -12,7 +12,7 @@ import { getHtmlForWebview } from './webviewTemplate';
 import { processAgyStreamEvent } from './streamEventProcessor';
 
 export class ChatWebviewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'antigravityVSCodeSidebar';
+  public static readonly viewType = 'positroniumSidebar';
   public view?: vscode.WebviewView;
   private currentPanel?: vscode.WebviewPanel;
   private sessionSkipPermissions: boolean = false;
@@ -134,8 +134,8 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     const panel = vscode.window.createWebviewPanel(
-      'antigravityVSCodePanel',
-      'Antigravity',
+      'positroniumPanel',
+      'Positronium',
       vscode.ViewColumn.One,
       {
         enableScripts: true,

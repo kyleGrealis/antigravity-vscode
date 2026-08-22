@@ -1,7 +1,8 @@
 # Release Notes
 
-## antigravity-vscode 0.2.5
+## Positronium 0.2.5
 
+- **Project rebrand to Positronium**: Renamed the extension and repository to Positronium (exotic agentic pair-programming for Positron and VS Code).
 - **Header actions dropdown menu (`[⋮]`)**: Replaced scattered header buttons with a unified dropdown menu housing active model status, session history, new conversation, token usage statistics, and clear chat.
 - **Model selector and reasoning effort resolution**: Added `/model` slash command autocomplete and smart CLI argument resolution that prevents conflicts between effort suffixes and `--effort` flags across third-party models and Google Gemini tiers.
 - **Clickable token usage tracker**: Clicking the token usage status bar in the chat footer now directly launches the comprehensive session token usage modal.

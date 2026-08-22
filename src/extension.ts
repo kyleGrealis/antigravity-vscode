@@ -18,42 +18,42 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.editor.open', () => {
+    vscode.commands.registerCommand('positronium.editor.open', () => {
       webviewProvider.createOrShowPanel();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.sidebar.open', () => {
-      vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar-container');
+    vscode.commands.registerCommand('positronium.sidebar.open', () => {
+      vscode.commands.executeCommand('workbench.view.extension.positronium-sidebar-container');
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.newConversation', () => {
+    vscode.commands.registerCommand('positronium.newConversation', () => {
       processManager.newSession();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.acceptProposedDiff', async () => {
+    vscode.commands.registerCommand('positronium.acceptProposedDiff', async () => {
       await diffController.acceptDiff();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.rejectProposedDiff', async () => {
+    vscode.commands.registerCommand('positronium.rejectProposedDiff', async () => {
       await diffController.rejectDiff();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('antigravity-vscode.focus', () => {
+    vscode.commands.registerCommand('positronium.focus', () => {
       if (webviewProvider.view) {
         webviewProvider.view.show?.(true);
         webviewProvider.view.webview.postMessage({ type: 'focusInput' });
       } else {
-        vscode.commands.executeCommand('antigravityVSCodeSidebar.focus');
+        vscode.commands.executeCommand('positroniumSidebar.focus');
       }
     })
   );

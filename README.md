@@ -1,9 +1,13 @@
-# Orbit (Antigravity for VS Code)
+# Positronium
 
-[![Version](https://img.shields.io/badge/version-0.2.5-blue.png)](https://github.com/kyleGrealis/antigravity-vscode/releases)
+[![Version](https://img.shields.io/badge/version-0.2.5-blue.png)](https://github.com/kyleGrealis/positronium/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.png)](LICENSE.txt)
 
 Harness the power of **Google Antigravity (`agy`)** directly inside VS Code and Positron.
+
+> In particle physics, *positronium* is the exotic, bound system where an electron and a positron orbit each other in a temporary pair before releasing pure energy.
+>
+> *Exotic agentic pair-programming for Positron.*
 
 <p align="center">
   <img src="media/welcome_screen.png" alt="Orbit Welcome Screen" width="70%" />
@@ -70,17 +74,17 @@ This opens a browser window for Google OAuth. Once authenticated, the session pe
 
 ### 3. Install the extension
 
-Download the latest `.vsix` file from the [Releases](https://github.com/kyleGrealis/antigravity-vscode/releases) page, then install:
+Download the latest `.vsix` file from the [Releases](https://github.com/kyleGrealis/positronium/releases) page, then install:
 
 ```bash
-code --install-extension antigravity-vscode-0.2.5.vsix
+code --install-extension positronium-0.2.5.vsix
 # or for Positron:
-positron --install-extension antigravity-vscode-0.2.5.vsix
+positron --install-extension positronium-0.2.5.vsix
 ```
 
 Or install from the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) > **Extensions: Install from VSIX...**
 
-That's it -- open the Orbit sidebar and start prompting.
+That's it -- open the Positronium sidebar and start prompting.
 
 ---
 
@@ -169,6 +173,6 @@ That's it -- open the Orbit sidebar and start prompting.
 
 Contributions, feature requests, and bug reports are welcome.
 
-- [Open an issue](https://github.com/kyleGrealis/antigravity-vscode/issues)
-- [Submit a pull request](https://github.com/kyleGrealis/antigravity-vscode/pulls)
-- [Source code](https://github.com/kyleGrealis/antigravity-vscode)
+- [Open an issue](https://github.com/kyleGrealis/positronium/issues)
+- [Submit a pull request](https://github.com/kyleGrealis/positronium/pulls)
+- [Source code](https://github.com/kyleGrealis/positronium)

@@ -16,7 +16,7 @@ function syncToInstalledExtension() {
     const extensionsDir = path.join(os.homedir(), '.positron', 'extensions');
     if (!fs.existsSync(extensionsDir)) return;
 
-    const targetDir = path.join(extensionsDir, `antigravity.antigravity-vscode-${pkg.version}`);
+    const targetDir = path.join(extensionsDir, `${pkg.publisher}.${pkg.name}-${pkg.version}`);
 
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });

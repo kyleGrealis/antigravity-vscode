@@ -45,7 +45,7 @@ export class DiffController {
       `Antigravity Diff: ${basename}`
     );
 
-    await vscode.commands.executeCommand('setContext', 'antigravity-vscode.viewingProposedDiff', true);
+    await vscode.commands.executeCommand('setContext', 'positronium.viewingProposedDiff', true);
   }
 
   public async showDiffFromToolCall(targetFilePath: string, toolName: string, toolArgs: any): Promise<void> {
@@ -168,7 +168,7 @@ export class DiffController {
     }
 
     if (this.activeDiffs.size === 0) {
-      vscode.commands.executeCommand('setContext', 'antigravity-vscode.viewingProposedDiff', false);
+      vscode.commands.executeCommand('setContext', 'positronium.viewingProposedDiff', false);
     }
   }
 }

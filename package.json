@@ -1,13 +1,13 @@
 {
-	"name": "antigravity-vscode",
-	"displayName": "Orbit",
-	"description": "Orbit companion for Google Antigravity in Positron & VS Code",
+	"name": "positronium",
+	"displayName": "Positronium",
+	"description": "Positronium: Antigravity AI pair programmer for Positron & VS Code",
 	"version": "0.2.5",
-	"publisher": "antigravity",
+	"publisher": "kylegrealis",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/kyleGrealis/antigravity-vscode.git"
+		"url": "https://github.com/kyleGrealis/positronium.git"
 	},
 	"icon": "media/antigravity-icon.png",
 	"engines": {
@@ -18,6 +18,8 @@
 		"Chat"
 	],
 	"keywords": [
+		"positronium",
+		"positron",
 		"orbit",
 		"antigravity",
 		"agy",
@@ -27,12 +29,12 @@
 	],
 	"activationEvents": [
 		"onStartupFinished",
-		"onWebviewPanel:antigravityVSCodePanel"
+		"onWebviewPanel:positroniumPanel"
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
 		"configuration": {
-			"title": "Orbit (Antigravity)",
+			"title": "Positronium (Antigravity)",
 			"properties": {
 				"antigravity.cliPath": {
 					"type": "string",
@@ -105,48 +107,48 @@
 		},
 		"commands": [
 			{
-				"command": "antigravity-vscode.editor.open",
-				"title": "Orbit: Open in New Tab",
+				"command": "positronium.editor.open",
+				"title": "Positronium: Open in New Tab",
 				"icon": "$(layout-sidebar-right-off)"
 			},
 			{
-				"command": "antigravity-vscode.sidebar.open",
-				"title": "Orbit: Open in Side Bar",
+				"command": "positronium.sidebar.open",
+				"title": "Positronium: Open in Side Bar",
 				"icon": "$(layout-sidebar-right)"
 			},
 			{
-				"command": "antigravity-vscode.newConversation",
-				"title": "Orbit: New Conversation",
+				"command": "positronium.newConversation",
+				"title": "Positronium: New Conversation",
 				"icon": "$(add)"
 			},
 			{
-				"command": "antigravity-vscode.acceptProposedDiff",
-				"title": "Orbit: Accept Proposed Changes",
-				"enablement": "antigravity-vscode.viewingProposedDiff",
+				"command": "positronium.acceptProposedDiff",
+				"title": "Positronium: Accept Proposed Changes",
+				"enablement": "positronium.viewingProposedDiff",
 				"icon": "$(check)"
 			},
 			{
-				"command": "antigravity-vscode.rejectProposedDiff",
-				"title": "Orbit: Reject Proposed Changes",
-				"enablement": "antigravity-vscode.viewingProposedDiff",
+				"command": "positronium.rejectProposedDiff",
+				"title": "Positronium: Reject Proposed Changes",
+				"enablement": "positronium.viewingProposedDiff",
 				"icon": "$(discard)"
 			},
 			{
-				"command": "antigravity-vscode.focus",
-				"title": "Orbit: Focus Input",
+				"command": "positronium.focus",
+				"title": "Positronium: Focus Input",
 				"icon": "$(keyboard)"
 			}
 		],
 		"keybindings": [
 			{
-				"command": "antigravity-vscode.focus",
+				"command": "positronium.focus",
 				"key": "ctrl+escape",
 				"mac": "cmd+escape",
 				"win": "ctrl+escape",
 				"linux": "ctrl+escape"
 			},
 			{
-				"command": "antigravity-vscode.editor.open",
+				"command": "positronium.editor.open",
 				"key": "ctrl+shift+escape",
 				"mac": "cmd+shift+escape",
 				"win": "ctrl+shift+escape",
@@ -156,18 +158,18 @@
 		"viewsContainers": {
 			"activitybar": [
 				{
-					"id": "antigravity-sidebar-container",
-					"title": "ORBIT",
+					"id": "positronium-sidebar-container",
+					"title": "POSITRONIUM",
 					"icon": "media/antigravity-icon.svg"
 				}
 			]
 		},
 		"views": {
-			"antigravity-sidebar-container": [
+			"positronium-sidebar-container": [
 				{
 					"type": "webview",
-					"id": "antigravityVSCodeSidebar",
-					"name": "ORBIT",
+					"id": "positroniumSidebar",
+					"name": "POSITRONIUM",
 					"icon": "media/antigravity-icon.svg"
 				}
 			]
@@ -175,17 +177,17 @@
 		"menus": {
 			"editor/title": [
 				{
-					"command": "antigravity-vscode.acceptProposedDiff",
-					"when": "antigravity-vscode.viewingProposedDiff",
+					"command": "positronium.acceptProposedDiff",
+					"when": "positronium.viewingProposedDiff",
 					"group": "navigation"
 				},
 				{
-					"command": "antigravity-vscode.rejectProposedDiff",
-					"when": "antigravity-vscode.viewingProposedDiff",
+					"command": "positronium.rejectProposedDiff",
+					"when": "positronium.viewingProposedDiff",
 					"group": "navigation"
 				},
 				{
-					"command": "antigravity-vscode.editor.open",
+					"command": "positronium.editor.open",
 					"group": "navigation"
 				}
 			]
