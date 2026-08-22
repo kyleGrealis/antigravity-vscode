@@ -862,7 +862,17 @@ export class ChatWebviewProvider implements vscode.WebviewViewProvider {
     }
 
     let promptText = '';
-    if (name === 'skill') {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspacePath = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
+    const skills = loadSkills(workspacePath);
+    const skillName = name === 'skill' ? (arg || '').trim() : name;
+    const matchedSkill = skills.find((s) => s.name === skillName);
+
+    if (matchedSkill) {
+      const extraArgs = name === 'skill' ? '' : (arg ? ` ${arg.trim()}` : '');
+      const skillPath = toForwardSlash(matchedSkill.path);
+      promptText = `Read and execute the instructions from the skill file at \`${skillPath}\`:\nUse the ${matchedSkill.name} skill.${extraArgs}`;
+    } else if (name === 'skill') {
       promptText = arg ? `Use the ${arg} skill.` : 'Use a skill.';
     } else {
       promptText = arg ? `Use the ${name} skill. ${arg}` : `Use the ${name} skill.`;
